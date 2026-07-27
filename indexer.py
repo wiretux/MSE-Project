@@ -11,11 +11,16 @@ class Indexer():
         STOP_WORD_PATH = Path('./stopwords.txt')
         self._stop_words = self.__get_stop_words(STOP_WORD_PATH)
 
-    # Remove punctuations of a text
+    # Replaces german umlaute in a text
     @staticmethod
-    def __remove_punctuations(text):
-        punctuations = string.punctuation
-        return text.translate(str.maketrans("", "", string.punctuation))
+    def __convert_german_umlaute(text):
+        mapping = str.maketrans({
+            "ä": "ae", "ö": "oe", "ü": "ue",
+            "Ä": "Ae", "Ö": "Oe", "Ü": "Ue",
+            "ß": "ss"
+        })
+
+        return text.translate(mapping)
 
     # Returns all the stop words as a list if the stopword list exists
     @staticmethod
@@ -30,8 +35,17 @@ class Indexer():
 
     # Pre-process text and split it into tokens
     def __get_tokenized_text(self, text):
-        # Remove punctuations, lower the text and split it into tokens
-        tokens = self.__remove_punctuations(text).lower().split()
+        # Lower the text
+        text = text.lower()
+
+        # Replace the german umlaute
+        text = self.__convert_german_umlaute(text)
+
+        # Remove all non alpha numeric symbols including punctuations
+        text = "".join(char if char.isalnum() else " " for char in text)
+
+        # Splits the text into tokens
+        tokens = text.split()
 
         # Stop word removal
         tokens = filter(lambda token: token not in self._stop_words, tokens)
@@ -53,4 +67,4 @@ class Indexer():
             store.update_document(doc_id, len(tokens))
 
 indexer = Indexer()
-indexer.index(1, 'the dog jumped ! over the lazy fox and dog')
+indexer.index(1, 'the dög jumped ! over the lazy..de fox and dög')
