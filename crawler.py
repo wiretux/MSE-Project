@@ -1,12 +1,16 @@
 from urllib.parse import urlsplit, urlunsplit, urljoin
 from urllib.request import Request, urlopen, urlretrieve
 from urllib.robotparser import RobotFileParser
+from time import sleep
+
 from bs4 import BeautifulSoup
 import utils.storage as storage
 
+from indexer import indexer
+
 USER_AGENT = 'MSE-Crawler' # User Agent used when crawling
-CRAWL_DEPTH = 3    # Maximum distance/depth crawler diverts from seed urls
-CRAWL_TIMEOUT = 2  # Timeout in seconds
+CRAWL_DEPTH = 1    # Maximum distance/depth crawler may deviate from seed urls
+CRAWL_TIMEOUT = 5  # Timeout in seconds
 MAX_DOCUMENT_SIZE = 2 * 1024 * 1024 # Document limit in bytes (2MiB)
 
 # MAX_PATH_DEPTH = 8 Maybe?
@@ -97,9 +101,9 @@ def __parse_document(document: string, site_url: string) -> (string, list[string
 
     return soup.get_text(separator=' ', strip=True), links
 
-def __crawl_site(site_url: string, depth: int = 0):
+def __crawl_site(site_url: string, depth: int = 0) -> (str | None, list[str]):
     if depth > CRAWL_DEPTH:
-        return None, None
+        return None, []
 
     site_url = __clean_url(site_url)
     site_netloc = urlsplit(site_url).netloc
@@ -113,7 +117,7 @@ def __crawl_site(site_url: string, depth: int = 0):
 
         # Don't add new links past CRAWL_DEPTH
         if depth >= CRAWL_DEPTH:
-            return content, None
+            return content, []
 
         # TODO: Limit execessive link usage
         #insite_links, outsite_links = [], []
@@ -125,22 +129,30 @@ def __crawl_site(site_url: string, depth: int = 0):
         
         return content, links
 
-    return None, None
+    return None, []
 
+# TODO: Parallelize website crawling
 def crawl():
     with storage.access() as store:
-        frontier = store.poll_frontier()
+        frontier = store.poll_frontier(10)
 
         while len(frontier) > 0:
-            site_url = frontier.pop()
+            # TODO: Replace by value specified in robots.txt
+            sleep(0.02)
+
+            doc_id, site_url, depth = frontier.pop()
             try:
-                content, links = __crawl_site(site_url, 0)
+                content, links = __crawl_site(site_url, depth)
 
-                # TODO: Append metadata like depth, etc.
-                # store.offer_frontier(links)
+                # Add links to frontier
+                if links is not None:
+                    store.offer_frontier([(link, depth + 1) for link in links])
 
-                # TODO: Add to index
-                # index(doc_id, content)
+                # Index document 
+                if content is not None and len(content) > 0:
+                    indexer.index(doc_id, content)
+                else:
+                    store.update_document(doc_id, None)
 
                 print(f'{site_url} | Crawled')
             except Exception as e:
@@ -149,5 +161,11 @@ def crawl():
             # If frontier is empty try to get next
             if len(frontier) == 0:
                 frontier = store.poll_frontier()
+
+# TODO: Move this to the main file later
+with storage.access() as store:
+    store.init()
+    # Add Seed URLS at depth 0
+    store.offer_frontier(('https://uni-tuebingen.de/en', 0))
 
 crawl()
