@@ -67,4 +67,3 @@ class Indexer():
             store.update_document(doc_id, len(tokens))
 
 indexer = Indexer()
-indexer.index(1, 'the dög jumped ! over the lazy..de fox and dög')
