@@ -2,7 +2,7 @@ from urllib.parse import urlsplit, urlunsplit, urljoin
 from urllib.request import Request, urlopen, urlretrieve
 from urllib.robotparser import RobotFileParser
 from bs4 import BeautifulSoup
-import storage
+import utils.storage as storage
 
 USER_AGENT = 'MSE-Crawler' # User Agent used when crawling
 CRAWL_DEPTH = 3    # Maximum distance/depth crawler diverts from seed urls

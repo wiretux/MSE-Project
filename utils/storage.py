@@ -23,7 +23,12 @@ class Storage:
             return []
         return [self.frontier.pop()]
 
-    def add_posting(self):
+    def update_document(self, doc_id: int, doc_length: int):
+        pass
+
+    def add_posting(self, doc_id: int, posting: (str, int) | list[(str, int)]):
+        # TODO Add term
+        # TODO Add posting
         pass
 
     def remove_posting(self):
@@ -31,30 +36,30 @@ class Storage:
 
     def get_postings(self, terms: list[str]) -> dict:
         query = """WITH rows AS (
-            SELECT term_id, doc_id, term_frequency 
-            FROM postings 
+            SELECT term_id, doc_id, term_frequency
+            FROM postings
             WHERE term IN (?)
-        ), 
+        ),
         term_postings AS (
-            SELECT 
-                term_id, 
-                json_group_array(json_object('doc', doc_id, 'tf', term_frequency)) AS docs 
-            FROM rows 
+            SELECT
+                term_id,
+                json_group_array(json_object('doc', doc_id, 'tf', term_frequency)) AS docs
+            FROM rows
             GROUP BY term_id
         ),
         aggregated_postings AS (
-            SELECT json_group_array(json_object('term', term_id, 'docs', docs)) AS postings 
+            SELECT json_group_array(json_object('term', term_id, 'docs', docs)) AS postings
             FROM term_postings
         ),
         doc_meta AS (
-            SELECT 
+            SELECT
                 json_group_array(json_object('doc', id, 'length', length)) AS lengths,
                 avg(length) AS avg_length,
                 count(*) AS total
             FROM documents
             WHERE EXISTS (SELECT 1 FROM rows WHERE doc_id = id)
         )
-        SELECT 
+        SELECT
             postings,
             lengths,
             avg_length,
@@ -89,7 +94,7 @@ class Storage:
     def close(self):
         #self._db.close()
         pass
-    
+
 
 @contextmanager
 def access() -> Generator[Storage, None, None]:
