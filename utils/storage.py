@@ -11,7 +11,6 @@ class DocumentStatus(IntEnum):
     INDEXED = 2,
     READY = 3
 
-# TODO: Replace mock with DB
 class Storage:
 
     def __init__(self):
@@ -105,51 +104,58 @@ class Storage:
 
         self._db.commit()
 
-    def get_postings(self, terms: list[str]) -> (dict, dict, float, int):
-        query = f"""WITH rows AS (
-            SELECT term_id, doc_id, tf
-            FROM postings
-            WHERE term_id IN (SELECT id FROM terms WHERE term IN ({','.join(['?'] * len(terms))}))
-        ),
-        term_postings AS (
-            SELECT
-                term_id,
-                json_group_object(lower(hex(doc_id)), tf) AS docs
-            FROM rows
-            GROUP BY term_id
-        ),
-        agg_postings AS (
-            SELECT json_group_object(lower(hex(term_id)), docs) AS postings
-            FROM term_postings
-        ),
-        doc_meta AS (
-            SELECT
-                json_group_object(lower(hex(id)), length) FILTER (WHERE EXISTS (SELECT 1 FROM rows WHERE doc_id = id)) AS lengths,
-                avg(length) AS avg_length,
-                count(*) AS total
+    def get_postings(self, terms: list[str], max: int = 2000) -> (dict, dict, float, int):
+        # TODO: Maybe replace pre-score with term-/posting-level filter
+        query = f"""
+        WITH corpus_meta AS (
+            SELECT count(*) AS N,
+                avg(length) AS avg_length
             FROM documents
+            WHERE status = 3
+        ),
+        term_meta AS (
+            SELECT id,
+                corpus_meta.N / count(doc_id) AS idf
+            FROM terms
+            CROSS JOIN corpus_meta
+            JOIN postings ON postings.term_id = id
+            WHERE term IN ({','.join(['?'] * len(terms))})
+            GROUP BY id, N
+        ),
+        docs AS (
+            SELECT doc_id AS id,
+                length,
+                json_group_object(lower(hex(term_id)), tf) AS terms,
+                sum(idf * tf) AS estimated_score
+            FROM postings
+            JOIN term_meta ON term_id = term_meta.id
+            JOIN documents ON doc_id = documents.id
+            GROUP BY doc_id
+            ORDER BY estimated_score DESC
+            LIMIT {max}
         )
         SELECT
-            postings,
-            lengths,
+            (SELECT json_group_object(lower(hex(id)), json_object('terms', terms, 'length', length)) FROM docs),
+            (SELECT json_group_object(lower(hex(id)), idf) FROM term_meta),
             avg_length,
-            total
-        FROM agg_postings
-        CROSS JOIN doc_meta"""
+            N
+        FROM corpus_meta
+        """
 
         self._cur.execute(query, terms)
-        postings, lengths, avg_length, total = self._cur.fetchone()
+        postings, term_meta, avg_length, total = self._cur.fetchone()
 
         postings = {
-            UUID(hex=term_id): {
-                UUID(hex=term_id): tf
-                for doc_id, tf in json.loads(docs).items()
-            } for term_id, docs in json.loads(postings).items()
+            UUID(hex=doc_id): {
+                'terms': { UUID(hex=term_id): tf for term_id, tf in json.loads(values['terms']).items() },
+                'length': values['length']
+            }
+            for doc_id, values in json.loads(postings).items()
         }
-        lengths = { UUID(hex=doc_id): length for doc_id, length in json.loads(lengths).items() }
+        term_meta = { UUID(hex=term_id): idf for term_id, idf in json.loads(term_meta).items() }
 
-        # ({ term_id: { doc_id: term_frequency, ... }, ... }, { doc_id: doc_length, ... }, avg_document_length, total_document_count)
-        return postings, lengths, avg_length, total
+        # ({ doc_id: { terms: { term_id: term_frequency, ... }, length: length }, ... }, { term_id: idf, ... }, avg_document_length, total_document_count)
+        return postings, term_meta, avg_length, total
 
     def close(self):
         self._cur.close()
