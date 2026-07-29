@@ -4,6 +4,7 @@ from collections.abc import Generator
 from enum import IntEnum
 from uuid import UUID, uuid7
 import json
+import array
 
 class DocumentStatus(IntEnum):
     PENDING = 0,
@@ -41,6 +42,11 @@ class Storage:
             doc_id BLOB REFERENCES doc(id) NOT NULL,
             tf INTEGER NOT NULL,
             PRIMARY KEY (term_id, doc_id)
+        ) STRICT, WITHOUT ROWID''')
+
+        self._cur.execute('''CREATE TABLE IF NOT EXISTS embeddings (
+            doc_id BLOB PRIMARY KEY REFERENCES doc(id) NOT NULL,
+            embedding BLOB NOT NULL
         ) STRICT, WITHOUT ROWID''')
 
         self._cur.execute(f'''UPDATE documents
@@ -96,6 +102,14 @@ class Storage:
     def count_index(self):
         self._cur.execute(f'SELECT count(*) FROM documents WHERE status = {DocumentStatus.READY}')
         return self._cur.fetchone()[0]
+
+    def add_embedding(self, doc_id: UUID, doc_embedding: list[float]):
+        embedding_blob = array.array('f', doc_embedding).tobytes()
+        self._cur.execute(
+                    'INSERT INTO embeddings (doc_id, embedding) VALUES (?, ?) ON CONFLICT DO NOTHING',
+                    [doc_id.bytes, embedding_blob]
+                )
+        self._db.commit()
 
     def add_posting(self, doc_id: UUID, posting: (str, int) | list[(str, int)]):
         if not isinstance(posting, list):

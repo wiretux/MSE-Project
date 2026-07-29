@@ -2,64 +2,65 @@ import string
 from collections import Counter
 from pathlib import Path
 
+import nltk
+from nltk.corpus import stopwords
+from nltk.tokenize import TweetTokenizer
+from nltk.stem import WordNetLemmatizer
+
 import utils.storage as storage
-from utils.porter2_stemmer import porter2_stemmer
+import utils.bert_reranker as bert_reranker
 
 class Indexer():
     def __init__(self):
-        # Stopword setup
-        STOP_WORD_PATH = Path('./stopwords.txt')
-        self._stop_words = self.__get_stop_words(STOP_WORD_PATH)
 
-    # Replaces german umlaute in a text
-    @staticmethod
-    def __convert_german_umlaute(text):
-        mapping = str.maketrans({
+        # Download/update the requiered files on initialization if needed
+        nltk.download('stopwords')
+        nltk.download('wordnet')
+
+
+        self._stop_words = set(stopwords.words('english'))
+
+        self._german_umlaute_mapping = str.maketrans({
             "ä": "ae", "ö": "oe", "ü": "ue",
             "Ä": "Ae", "Ö": "Oe", "Ü": "Ue",
             "ß": "ss"
         })
 
-        return text.translate(mapping)
+        self.tokenizer = TweetTokenizer(preserve_case=False)
 
-    # Returns all the stop words as a list if the stopword list exists
-    @staticmethod
-    def __get_stop_words(path):
-        if not path.is_file():
-                print(path.name + ' is missing')
-                return []
+        self.lemmatizer = WordNetLemmatizer()
 
-        with open(path, 'r', encoding='utf-8') as f:
-            next(f, None) # This is needed for the header line containing the source
-            return set([line.strip().lower() for line in f if line.strip()])
+    # Replaces german umlaute in a text
+    def convert_german_umlaute(self, text):
+        return text.translate(self._german_umlaute_mapping)
 
     # Pre-process text and split it into tokens
-    def __get_tokenized_text(self, text):
-        # Lower the text
-        text = text.lower()
+    def preprocess_text(self, text):
+        # Splits the text into tokens and lowers it
+        tokens = self.tokenizer.tokenize(text)
+
+        # Remove all punctuation only tokens
+        tokens = filter(lambda token: any(char.isalnum() for char in token), tokens)
 
         # Replace the german umlaute
-        text = self.__convert_german_umlaute(text)
-
-        # Remove all non alpha numeric symbols including punctuations
-        text = "".join(char if char.isalnum() else " " for char in text)
-
-        # Splits the text into tokens
-        tokens = text.split()
+        tokens = map(self.convert_german_umlaute, tokens)
 
         # Stop word removal
         tokens = filter(lambda token: token not in self._stop_words, tokens)
 
-        # Porter Stemming Algo
-        # We use the snowball stemmer algo here for better results
-        tokens = map(porter2_stemmer, tokens)
+        # Lemmatization
+        tokens = map(self.lemmatizer.lemmatize, tokens)
 
         return list(tokens)
 
     def index(self, doc_id, document) -> bool:
-        tokens = self.__get_tokenized_text(document['content'])
+        # TODO Use the title when it gets implemented
+        #full_doc_content = f"{document['titel']}. {document['content']}"
+        full_doc_content = document['content']
+        doc_embedding = bert_reranker.get_bert_embedding(full_doc_content)
 
-        terms = set(tokens)
+        tokens = self.preprocess_text(document['content'])
+
         tfs = list(Counter(tokens).items())
 
         if len(tfs) < 1:
@@ -67,6 +68,7 @@ class Indexer():
 
         with storage.access() as store:
             store.add_posting(doc_id, tfs)
+            store.add_embedding(doc_id, doc_embedding)
             store.update_length(doc_id, len(tokens))
 
         return True
