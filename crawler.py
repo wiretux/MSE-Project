@@ -1,18 +1,27 @@
+# Fetch related
 from urllib.parse import urlsplit, urlunsplit, urljoin
 from urllib.request import Request, urlopen, urlretrieve
 from urllib.robotparser import RobotFileParser
+from bs4 import BeautifulSoup
+
+# Optimization related
+from threading import Thread
+from queue import Queue, ShutDown
 from time import sleep
 
-from bs4 import BeautifulSoup
-import utils.storage as storage
+# UI related
+from rich.progress import Progress, TextColumn, BarColumn, TaskProgressColumn, TimeRemainingColumn, TimeElapsedColumn
 
+# Our libraries
+import utils.storage as storage
 from indexer import indexer
 
 USER_AGENT = 'MSE-Crawler' # User Agent used when crawling
 CRAWL_DEPTH = 1    # Maximum distance/depth crawler may deviate from seed urls
 CRAWL_TIMEOUT = 5  # Timeout in seconds
+CRAWLER_COUNT = 2
+CRAWLER_DELAY = 0.01
 MAX_DOCUMENT_SIZE = 2 * 1024 * 1024 # Document limit in bytes (2MiB)
-
 # MAX_PATH_DEPTH = 8 Maybe?
 
 def __clean_url(url: string) -> string | None:
@@ -53,7 +62,7 @@ def __fetch_document(site_url: string) -> string | None:
         chunks = []
         total_bytes = 0
         while total_bytes < MAX_DOCUMENT_SIZE:
-            chunk = res.read(1024)
+            chunk = res.read(8192)
             if not chunk: # EOF
                 break
 
@@ -101,23 +110,21 @@ def __parse_document(document: string, site_url: string) -> (string, list[string
 
     return soup.get_text(separator=' ', strip=True), links
 
-def __crawl_site(site_url: string, depth: int = 0) -> (str | None, list[str]):
+def __crawl_site(site_url: string, depth: int = 0) -> { 'title': str, 'description': str, 'content': str, 'links': list[str] } | None:
     if depth > CRAWL_DEPTH:
-        return None, []
+        return None
 
     site_url = __clean_url(site_url)
     site_netloc = urlsplit(site_url).netloc
 
     rp = __parse_robots(site_url)
-    delay = rp.crawl_delay(USER_AGENT)
+
+    # TODO: Try to delay crawling of certain page
+    #delay = rp.crawl_delay(USER_AGENT)
     can_fetch = rp.can_fetch(USER_AGENT, site_url)
 
     if can_fetch:
         content, links = __parse_document(__fetch_document(site_url), site_url)
-
-        # Don't add new links past CRAWL_DEPTH
-        if depth >= CRAWL_DEPTH:
-            return content, []
 
         # TODO: Limit execessive link usage
         #insite_links, outsite_links = [], []
@@ -126,41 +133,106 @@ def __crawl_site(site_url: string, depth: int = 0) -> (str | None, list[str]):
         #        insite_links.append(link)
         #    else:
         #        outsite_links.append(link)
+
+        return {
+            'title': None, # TODO: Get title from document
+            'description': None, # TODO: Get description from document
+            'content': content,
         
-        return content, links
+            # Don't add new links past CRAWL_DEPTH
+            'links': links
+        }
 
-    return None, []
+    return None
 
-# TODO: Parallelize website crawling
-def crawl():
-    with storage.access() as store:
-        frontier = store.poll_frontier(10)
-
-        while len(frontier) > 0:
-            # TODO: Replace by value specified in robots.txt
-            sleep(0.02)
-
-            doc_id, site_url, depth = frontier.pop()
+def crawler(queue: Queue, outqueue: Queue):
+    try:
+        while (item := queue.get()) is not None:
+            doc_id, url, depth = item
             try:
-                content, links = __crawl_site(site_url, depth)
-
-                # Add links to frontier
-                if links is not None:
-                    store.offer_frontier([(link, depth + 1) for link in links])
-
-                # Index document 
-                if content is not None and len(content) > 0:
-                    indexer.index(doc_id, content)
-                else:
-                    store.update_document(doc_id, None)
-
-                print(f'{site_url} | Crawled')
+                site = __crawl_site(url, depth)
+                outqueue.put((
+                    doc_id, # doc_id
+                    site, # site
+                    depth, # depth
+                    None # error
+                ))
             except Exception as e:
-                print(f'{site_url} | {e}')
+                outqueue.put((
+                    doc_id, # doc_id
+                    None, # site
+                    depth, # depth
+                    e # error
+                ))
+            queue.task_done()
+    except ShutDown:
+        pass
 
-            # If frontier is empty try to get next
-            if len(frontier) == 0:
-                frontier = store.poll_frontier()
+def index_consumer(queue: Queue):
+    try:
+        with Progress() as progress:
+            task_map = {}
+
+            with storage.access() as store:
+                while (item := queue.get()) is not None:
+                    doc_id, site, depth, e = item
+
+                    if depth not in task_map:
+                        task_map[depth] = progress.add_task(f'{depth} - Depth', total=store.count_frontier(depth))
+
+                    # If there is error store error status in DB
+                    if e is None:
+                        # If there is content index else status skipped
+                        if site and site['content'] and indexer.index(doc_id, site):
+                            store.update_status(doc_id, storage.DocumentStatus.READY)
+                        else:
+                            store.update_status(doc_id, storage.DocumentStatus.SKIPPED)
+                        
+                        # Add links to frontier
+                        if site and site['links']:
+                            store.offer_frontier([(link, depth + 1) for link in site['links']])
+                    else:
+                        store.update_status(doc_id, storage.DocumentStatus.ERROR)
+
+                    progress.advance(task_map[depth], 1)
+                    queue.task_done()
+    except ShutDown:
+        pass
+
+def crawl():
+    frontier_queue = Queue(maxsize=24)
+    index_queue = Queue(maxsize=24)
+
+    crawlers = []
+    consumer = Thread(target=index_consumer, args=(index_queue,))
+    consumer.start()
+
+    for _ in range(CRAWLER_COUNT):
+        crawlers.append(Thread(target=crawler, args=(frontier_queue,index_queue,)))
+        crawlers[-1].start()
+    
+    with storage.access() as store:
+        for depth in range(CRAWL_DEPTH + 1):
+            while frontier := store.poll_frontier(50, depth):
+                for task in frontier:
+                    frontier_queue.put(task)
+
+            # Make sure we don't overlap depth, so we can
+            # get the total amount of sites to crawl for
+            # any given depth
+            frontier_queue.join()
+            index_queue.join()
+
+    frontier_queue.shutdown()
+    index_queue.shutdown()
+
+    for c in crawlers:
+        c.join()
+    consumer.join()
+
+    with storage.access() as store:
+        print('Crawling/Indexing complete')
+        print(f'Sites indexed: {store.count_index()}')
 
 # TODO: Move this to the main file later
 with storage.access() as store:

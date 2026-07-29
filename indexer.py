@@ -56,14 +56,19 @@ class Indexer():
 
         return list(tokens)
 
-    def index(self, doc_id, doc_content):
-        tokens = self.__get_tokenized_text(doc_content)
+    def index(self, doc_id, document) -> bool:
+        tokens = self.__get_tokenized_text(document['content'])
 
         terms = set(tokens)
         tfs = list(Counter(tokens).items())
 
+        if len(tfs) < 1:
+            return False
+
         with storage.access() as store:
             store.add_posting(doc_id, tfs)
-            store.update_document(doc_id, len(tokens))
+            store.update_length(doc_id, len(tokens))
+
+        return True
 
 indexer = Indexer()

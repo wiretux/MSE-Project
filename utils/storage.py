@@ -9,7 +9,10 @@ class DocumentStatus(IntEnum):
     PENDING = 0,
     QUEUED = 1,
     INDEXED = 2,
-    READY = 3
+    READY = 3,
+
+    SKIPPED = 254,
+    ERROR = 255
 
 class Storage:
 
@@ -42,7 +45,7 @@ class Storage:
 
         self._cur.execute(f'''UPDATE documents
         SET status = {DocumentStatus.PENDING}
-        WHERE status != {DocumentStatus.READY}''')
+        WHERE status < {DocumentStatus.READY}''')
 
         self._db.commit()
 
@@ -60,11 +63,15 @@ class Storage:
         )
         self._db.commit()
 
-    def poll_frontier(self, max: int = 100) -> list[(UUID, str, int)]:
+    def count_frontier(self, depth: int = 0):
+        self._cur.execute(f'SELECT count(*) FROM documents WHERE status = {DocumentStatus.PENDING} AND depth = ?', [depth])
+        return self._cur.fetchone()[0]
+
+    def poll_frontier(self, max: int = 100, max_depth: int = 100) -> list[(UUID, str, int)]:
         query = f"""WITH rows AS (
             SELECT id
             FROM documents
-            WHERE status = {DocumentStatus.PENDING}
+            WHERE status = {DocumentStatus.PENDING} AND depth <= ?
             ORDER BY depth
             LIMIT ?
         )
@@ -74,23 +81,35 @@ class Storage:
         RETURNING id, url, depth
         """
 
-        results = self._cur.execute(query, [max]).fetchall()
+        results = self._cur.execute(query, [max_depth, max]).fetchall()
         self._db.commit()
         return [(UUID(bytes=byte_id), url, depth) for byte_id, url, depth in results]
 
-    def update_document(self, doc_id: UUID, doc_length: int | None):
-        self._cur.execute(f'UPDATE documents SET length = ?, status = {DocumentStatus.READY} WHERE id = ?', [doc_length, doc_id.bytes])
+    def update_status(self, doc_id: UUID, status: DocumentStatus = DocumentStatus.READY):
+        self._cur.execute(f'UPDATE documents SET status = ? WHERE id = ?', [status, doc_id.bytes])
         self._db.commit()
+
+    def update_length(self, doc_id: UUID, doc_length: int | None):
+        self._cur.execute(f'UPDATE documents SET length = ? WHERE id = ?', [doc_length, doc_id.bytes])
+        self._db.commit()
+
+    def count_index(self):
+        self._cur.execute(f'SELECT count(*) FROM documents WHERE status = {DocumentStatus.READY}')
+        return self._cur.fetchone()[0]
 
     def add_posting(self, doc_id: UUID, posting: (str, int) | list[(str, int)]):
         if not isinstance(posting, list):
             posting = [posting]
+
+        if len(posting) < 1:
+            return
 
         # Make sure all terms exist
         self._cur.execute(
             f'INSERT INTO terms (id, term) VALUES {', '.join(["(?, ?)"] * len(posting))} ON CONFLICT(term) DO UPDATE SET term = term RETURNING term, id',
             [item for term, _ in posting for item in (uuid7().bytes, term)]
         )
+
 
         term_mappings = dict(self._cur.fetchall())
         self._db.commit()
