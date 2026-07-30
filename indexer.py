@@ -17,8 +17,6 @@ def index(doc_id, document) -> bool:
     if len(tfs) < 1:
         return False
 
-    print(tokens)
-
     with storage.access() as store:
         store.add_posting(doc_id, tfs)
         store.add_embedding(doc_id, doc_embedding)
