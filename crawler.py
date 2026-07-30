@@ -14,7 +14,7 @@ from rich.progress import Progress, TextColumn, BarColumn, TaskProgressColumn, T
 
 # Our libraries
 import utils.storage as storage
-from indexer import indexer
+from indexer import index
 
 USER_AGENT = 'MSE-Crawler' # User Agent used when crawling
 CRAWL_DEPTH = 1    # Maximum distance/depth crawler may deviate from seed urls
@@ -183,7 +183,7 @@ def index_consumer(queue: Queue):
                     # If there is error store error status in DB
                     if e is None:
                         # If there is content index else status skipped
-                        if site and site['content'] and indexer.index(doc_id, site):
+                        if site and site['content'] and index(doc_id, site):
                             store.update_status(doc_id, storage.DocumentStatus.READY)
                         else:
                             store.update_status(doc_id, storage.DocumentStatus.SKIPPED)
