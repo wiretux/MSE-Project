@@ -13,9 +13,12 @@ def is_relevant(text: str, tokens: list[str]) -> bool:
 
 
 def index(doc_id: UUID, document: dict) -> bool:
-    # TODO Use the title when it gets implemented
-    # full_doc_content = f"{document['titel']}. {document['content']}"
     full_doc_content = document["content"]
+    if desc := document["desc"]:
+        full_doc_content = f"{desc}. {full_doc_content}"
+    if title := document["title"]:
+        full_doc_content = f"{title}. {full_doc_content}"
+
     doc_embedding = bert_reranker.get_bert_embedding(full_doc_content)
 
     tokens = preprocess_text(document["content"])
@@ -28,5 +31,5 @@ def index(doc_id: UUID, document: dict) -> bool:
     with storage.access() as store:
         store.add_posting(doc_id, tfs)
         store.add_embedding(doc_id, doc_embedding)
-        store.update_length(doc_id, len(tokens))
+        store.update_document(doc_id, title, desc, len(tokens))
     return True

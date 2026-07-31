@@ -12,7 +12,6 @@ class DocumentStatus(IntEnum):
     QUEUED = (1,)
     INDEXED = (2,)
     READY = (3,)
-
     SKIPPED = (254,)
     ERROR = 255
 
@@ -105,9 +104,12 @@ class Storage:
         )
         self._db.commit()
 
-    def update_length(self, doc_id: UUID, doc_length: int | None):
+    def update_document(
+        self, doc_id: UUID, title: str | None, desc: str | None, doc_length: int
+    ):
         self._cur.execute(
-            "UPDATE documents SET length = ? WHERE id = ?", [doc_length, doc_id.bytes]
+            "UPDATE documents SET title = ?, description = ?, length = ? WHERE id = ?",
+            [title, desc, doc_length, doc_id.bytes],
         )
         self._db.commit()
 

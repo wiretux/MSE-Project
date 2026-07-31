@@ -78,7 +78,8 @@ def __parse_document(document: str, site_url: str) -> (str, list[str], str, str)
     Extracts text content and links from a given document.
     """
     soup = BeautifulSoup(document, "html.parser")
-    title = soup.title.string if soup.title else None
+
+    title = soup.title.extract().string if soup.title else None
 
     desc_tag = soup.find("meta", attrs={"name": "description"})
     desc = desc_tag["content"] if desc_tag and desc_tag.has_attr("content") else None
@@ -139,7 +140,7 @@ def __crawl_site(site_url: str, depth: int = 0) -> dict | None:
 
         return {
             "title": title,  # TODO: Get title from document
-            "description": desc,  # TODO: Get description from document
+            "desc": desc,  # TODO: Get description from document
             "content": content,
             # Don't add new links past CRAWL_DEPTH
             "links": links,
