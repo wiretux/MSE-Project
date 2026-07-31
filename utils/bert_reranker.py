@@ -1,3 +1,5 @@
+from uuid import UUID
+
 import torch
 from transformers import AutoModel, AutoTokenizer, logging
 
@@ -5,8 +7,8 @@ from transformers import AutoModel, AutoTokenizer, logging
 logging.set_verbosity_error()
 
 # Load the bert model
-tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
-model = AutoModel.from_pretrained("bert-base-uncased")
+tokenizer = AutoTokenizer.from_pretrained("bert-large-uncased")
+model = AutoModel.from_pretrained("bert-large-uncased")
 model.eval()
 
 
@@ -42,7 +44,7 @@ def get_bert_embedding(text):
     return __get_mean_polled_embedding(output, inputs["attention_mask"])
 
 
-def bert_reranker(query_text: str, doc_embeddings_dict: dict):
+def bert_reranker(query_text: str, doc_embeddings_dict: dict) -> list[(UUID, float)]:
     if not query_text or not doc_embeddings_dict:
         return []
 
@@ -64,7 +66,7 @@ def bert_reranker(query_text: str, doc_embeddings_dict: dict):
     # Sort the docs descending by score
     ranked_results.sort(key=lambda x: x[1], reverse=True)
 
-    return [doc_id for doc_id, score in ranked_results]
+    return [(doc_id, score) for doc_id, score in ranked_results]
 
 
 # Example Documents

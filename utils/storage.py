@@ -191,7 +191,8 @@ class Storage:
         ),
         term_meta AS (
             SELECT id,
-                corpus_meta.N / count(doc_id) AS idf
+                corpus_meta.N / count(doc_id) AS idf,
+                count(doc_id) AS doc_count
             FROM terms
             CROSS JOIN corpus_meta
             JOIN postings ON postings.term_id = id
@@ -212,7 +213,7 @@ class Storage:
         )
         SELECT
             (SELECT json_group_object(lower(hex(id)), json_object('terms', terms, 'length', length)) FROM docs),
-            (SELECT json_group_object(lower(hex(id)), idf) FROM term_meta),
+            (SELECT json_group_object(lower(hex(id)), doc_count) FROM term_meta),
             avg_length,
             N
         FROM corpus_meta
