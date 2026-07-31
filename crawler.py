@@ -1,149 +1,152 @@
-# Fetch related
-from urllib.parse import urlsplit, urlunsplit, urljoin
-from urllib.request import Request, urlopen, urlretrieve
-from urllib.robotparser import RobotFileParser
-from bs4 import BeautifulSoup
-
-# Optimization related
-from threading import Thread
 from queue import Queue, ShutDown
-from time import sleep
+from threading import Thread
+from urllib.parse import urljoin, urlsplit, urlunsplit
+from urllib.request import Request, URLError, urlopen
+from urllib.robotparser import RobotFileParser
 
-# UI related
-from rich.progress import Progress, TextColumn, BarColumn, TaskProgressColumn, TimeRemainingColumn, TimeElapsedColumn
+from bs4 import BeautifulSoup
+from rich.progress import Progress
 
-# Our libraries
-import utils.storage as storage
 from indexer import index
+from utils import storage
 
-USER_AGENT = 'MSE-Crawler' # User Agent used when crawling
-CRAWL_DEPTH = 1    # Maximum distance/depth crawler may deviate from seed urls
+USER_AGENT = "MSE-Crawler"  # User Agent used when crawling
+CRAWL_DEPTH = 1  # Maximum distance/depth crawler may deviate from seed urls
 CRAWL_TIMEOUT = 5  # Timeout in seconds
 CRAWLER_COUNT = 2
 CRAWLER_DELAY = 0.01
-MAX_DOCUMENT_SIZE = 2 * 1024 * 1024 # Document limit in bytes (2MiB)
+MAX_DOCUMENT_SIZE = 2 * 1024 * 1024  # Document limit in bytes (2MiB)
 # MAX_PATH_DEPTH = 8 Maybe?
 
-def __clean_url(url: string) -> string | None:
+
+def __clean_url(url: str) -> str | None:
     """
     Remove query and fragment part of urls
     Only keeps urls which scheme is either http/https
     (Filters unwanted protocols like tel/mailto)
     """
-    parsed = urlsplit(url)._replace(query='', fragment='')
-    if parsed.scheme.lower() in ['http', 'https']:
+    parsed = urlsplit(url)._replace(query="", fragment="")
+    if parsed.scheme.lower() in ["http", "https"]:
         return urlunsplit(parsed)
     return None
 
-def __parse_robots(site_url: string) -> RobotFileParser:
+
+def __parse_robots(site_url: str) -> RobotFileParser:
     """
     Tries to read/get the robots.txt
     Defaults to allow everything, if parsing fails. (Not Found/Invalid Cert)
     """
-    rp = RobotFileParser(urlunsplit(urlsplit(site_url)._replace(path='/robots.txt')))
+    rp = RobotFileParser(urlunsplit(urlsplit(site_url)._replace(path="/robots.txt")))
 
     try:
         rp.read()
-    except:
+    except URLError:
         rp.parse([])
 
     return rp
 
-def __fetch_document(site_url: string) -> string | None:
+
+def __fetch_document(site_url: str) -> str | None:
     """
     Fetches document from the specified site_url
     """
-    req = Request(site_url, headers={ 'User-Agent': USER_AGENT })
+    req = Request(site_url, headers={"User-Agent": USER_AGENT, "Accept-Language": "en"})
     with urlopen(req, timeout=CRAWL_TIMEOUT) as res:
-        content_length = res.headers.get('Content-Length')
+        content_length = res.headers.get("Content-Length")
         if content_length and int(content_length) > MAX_DOCUMENT_SIZE:
-            raise ValueError('Document exceeds size limit')
+            raise ValueError("Document exceeds size limit")
 
         chunks = []
         total_bytes = 0
         while total_bytes < MAX_DOCUMENT_SIZE:
             chunk = res.read(8192)
-            if not chunk: # EOF
+            if not chunk:  # EOF
                 break
 
             total_bytes += len(chunk)
 
             # TODO: Should we raise an error or try to parse the first 2MiB
             if total_bytes >= MAX_DOCUMENT_SIZE:
-                raise ValueError('Document exceeds size limit')
+                raise ValueError("Document exceeds size limit")
 
             chunks.append(chunk)
-        return b''.join(chunks).decode('utf-8', errors='replace')
+        return b"".join(chunks).decode("utf-8", errors="replace")
 
-# TODO: Filter non english pages / unrelated to Tuebingen
-def __parse_document(document: string, site_url: string) -> (string, list[string]):
+
+def __parse_document(document: str, site_url: str) -> (str, list[str], str, str):
     """
     Extracts text content and links from a given document.
     """
-    soup = BeautifulSoup(document, 'html.parser')
-    
+    soup = BeautifulSoup(document, "html.parser")
+    title = soup.title.string if soup.title else None
+
+    desc_tag = soup.find("meta", attrs={"name": "description"})
+    desc = desc_tag["content"] if desc_tag and desc_tag.has_attr("content") else None
 
     # Extract links from document
-    links = set([
+    links = {
         link
-        for element in soup.find_all('a', href=True)
-        if (link := __clean_url(urljoin(site_url, element['href'])))
+        for element in soup.find_all("a", href=True)
+        if (link := __clean_url(urljoin(site_url, element["href"])))
         # Maybe limit MAX PATH DEPTH?: if len(link.split('/')) > MAX_PATH_DEPTH + 2
-    ])
+    }
 
     # Remove non content elements (e.g. nav, header, footer, aside)
     # This should be relatively safe, since modern sites
     # use semantic tags like <main> for their content and
     # nav elements don't really contribute to the actual
     # content of a page.
-    for tag in ['nav', 'header', 'footer', 'aside']:
+    for tag in ["nav", "header", "footer", "aside"]:
         for element in soup.find_all(tag):
             element.decompose()
 
     # Replace images with their alt text
-    for element in soup.find_all('img'):
-        alt = element.get('alt')
-        if alt and (' ' in alt or alt.isalnum()):
+    for element in soup.find_all("img"):
+        alt = element.get("alt")
+        if alt and (" " in alt or alt.isalnum()):
             element.replace_with(alt)
         else:
             element.decompose()
 
-    return soup.get_text(separator=' ', strip=True), links
+    return title, desc, soup.get_text(separator=" ", strip=True), links
 
-def __crawl_site(site_url: string, depth: int = 0) -> { 'title': str, 'description': str, 'content': str, 'links': list[str] } | None:
+
+def __crawl_site(site_url: str, depth: int = 0) -> dict | None:
     if depth > CRAWL_DEPTH:
         return None
 
     site_url = __clean_url(site_url)
-    site_netloc = urlsplit(site_url).netloc
+    # netloc = urlsplit(site_url).netloc
 
     rp = __parse_robots(site_url)
 
     # TODO: Try to delay crawling of certain page
-    #delay = rp.crawl_delay(USER_AGENT)
+    # delay = rp.crawl_delay(USER_AGENT)
     can_fetch = rp.can_fetch(USER_AGENT, site_url)
 
     if can_fetch:
-        content, links = __parse_document(__fetch_document(site_url), site_url)
+        title, desc, content, links = __parse_document(
+            __fetch_document(site_url), site_url
+        )
 
         # TODO: Limit execessive link usage
-        #insite_links, outsite_links = [], []
-        #for link in links:
+        # insite_links, outsite_links = [], []
+        # for link in links:
         #    if urlsplit(link).netloc == site_netloc and len(insite_links) < 200:
         #        insite_links.append(link)
         #    else:
         #        outsite_links.append(link)
 
         return {
-            'title': None, # TODO: Get title from document
-            'description': None, # TODO: Get description from document
-            'content': content,
-        
+            "title": title,  # TODO: Get title from document
+            "description": desc,  # TODO: Get description from document
+            "content": content,
             # Don't add new links past CRAWL_DEPTH
-            'links': links
+            "links": links,
         }
 
     return None
+
 
 def crawler(queue: Queue, outqueue: Queue):
     try:
@@ -151,22 +154,27 @@ def crawler(queue: Queue, outqueue: Queue):
             doc_id, url, depth = item
             try:
                 site = __crawl_site(url, depth)
-                outqueue.put((
-                    doc_id, # doc_id
-                    site, # site
-                    depth, # depth
-                    None # error
-                ))
-            except Exception as e:
-                outqueue.put((
-                    doc_id, # doc_id
-                    None, # site
-                    depth, # depth
-                    e # error
-                ))
+                outqueue.put(
+                    (
+                        doc_id,  # doc_id
+                        site,  # site
+                        depth,  # depth
+                        None,  # error
+                    )
+                )
+            except URLError as e:
+                outqueue.put(
+                    (
+                        doc_id,  # doc_id
+                        None,  # site
+                        depth,  # depth
+                        e,  # error
+                    )
+                )
             queue.task_done()
     except ShutDown:
         pass
+
 
 def index_consumer(queue: Queue):
     try:
@@ -178,19 +186,23 @@ def index_consumer(queue: Queue):
                     doc_id, site, depth, e = item
 
                     if depth not in task_map:
-                        task_map[depth] = progress.add_task(f'{depth} - Depth', total=store.count_frontier(depth))
+                        task_map[depth] = progress.add_task(
+                            f"{depth} - Depth", total=store.count_frontier(depth)
+                        )
 
                     # If there is error store error status in DB
                     if e is None:
                         # If there is content index else status skipped
-                        if site and site['content'] and index(doc_id, site):
+                        if site and site["content"] and index(doc_id, site):
                             store.update_status(doc_id, storage.DocumentStatus.READY)
                         else:
                             store.update_status(doc_id, storage.DocumentStatus.SKIPPED)
-                        
+
                         # Add links to frontier
-                        if site and site['links']:
-                            store.offer_frontier([(link, depth + 1) for link in site['links']])
+                        if site and site["links"]:
+                            store.offer_frontier(
+                                [(link, depth + 1) for link in site["links"]]
+                            )
                     else:
                         store.update_status(doc_id, storage.DocumentStatus.ERROR)
 
@@ -198,6 +210,7 @@ def index_consumer(queue: Queue):
                     queue.task_done()
     except ShutDown:
         pass
+
 
 def crawl():
     frontier_queue = Queue(maxsize=24)
@@ -208,9 +221,17 @@ def crawl():
     consumer.start()
 
     for _ in range(CRAWLER_COUNT):
-        crawlers.append(Thread(target=crawler, args=(frontier_queue,index_queue,)))
+        crawlers.append(
+            Thread(
+                target=crawler,
+                args=(
+                    frontier_queue,
+                    index_queue,
+                ),
+            )
+        )
         crawlers[-1].start()
-    
+
     with storage.access() as store:
         for depth in range(CRAWL_DEPTH + 1):
             while frontier := store.poll_frontier(50, depth):
@@ -231,13 +252,14 @@ def crawl():
     consumer.join()
 
     with storage.access() as store:
-        print('Crawling/Indexing complete')
-        print(f'Sites indexed: {store.count_index()}')
+        print("Crawling/Indexing complete")
+        print(f"Sites indexed: {store.count_index()}")
+
 
 # TODO: Move this to the main file later
 with storage.access() as store:
     store.init()
     # Add Seed URLS at depth 0
-    store.offer_frontier(('https://uni-tuebingen.de/en', 0))
+    store.offer_frontier(("https://uni-tuebingen.de/en", 0))
 
 crawl()

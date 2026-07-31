@@ -20,9 +20,9 @@ Requirements:
         *
 """
 
-import sqlite3
-import re
 import math
+import re
+import sqlite3
 import sys
 
 LIMIT = 10
@@ -146,7 +146,7 @@ def save_results(query, results):
 
 if len(sys.argv) < 2:
     print("Please provide a search query")
-    exit()
+    sys.exit()
 
 query = " ".join(sys.argv[1:])
 

@@ -1,28 +1,37 @@
-import string
 import nltk
-from nltk.corpus import stopwords
-from nltk.tokenize import TweetTokenizer
+from nltk.corpus import stopwords, words
 from nltk.stem import WordNetLemmatizer
+from nltk.tokenize import TweetTokenizer
 
 # Download/update the requiered files on initialization if needed
-nltk.download('stopwords')
-nltk.download('wordnet')
+nltk.download("stopwords")
+nltk.download("wordnet")
+nltk.download("words")
 
-_stop_words = set(stopwords.words('english'))
+_stop_words = set(stopwords.words("english"))
 
-_german_umlaute_mapping = str.maketrans({
-    "ä": "ae", "ö": "oe", "ü": "ue",
-    "Ä": "Ae", "Ö": "Oe", "Ü": "Ue",
-    "ß": "ss"
-})
+_german_umlaute_mapping = str.maketrans(
+    {"ä": "ae", "ö": "oe", "ü": "ue", "Ä": "Ae", "Ö": "Oe", "Ü": "Ue", "ß": "ss"}
+)
+
+_english_vocab = {w.lower() for w in words.words("en")}
 
 tokenizer = TweetTokenizer(preserve_case=False)
 
 lemmatizer = WordNetLemmatizer()
 
+
 # Replaces german umlaute in a text
 def convert_german_umlaute(text):
     return text.translate(_german_umlaute_mapping)
+
+
+def tokenize(text):
+    # Splits the text into tokens and lowers it
+    tokens = tokenizer.tokenize(text)
+
+    return tokens
+
 
 # Pre-process text and split it into tokens
 def preprocess_text(text):

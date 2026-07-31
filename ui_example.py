@@ -7,6 +7,7 @@ from textual.widgets import Input, Label, ListItem, ListView
 # This is just a quick and dirty example implementation!
 # The basics and structure can be used for a real implementation
 
+
 class SearchScreen(Screen):
     CSS = """
     SearchScreen { align: center middle; padding: 1 0;}
@@ -50,12 +51,12 @@ class SearchScreen(Screen):
         yield Label("Press Ctrl+Q to exit", id="exit-label")
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
-        user_value = event.value
         if event.value:
             self.app.push_screen(ResultScreen(search_term=event.value))
 
     def on_ready(self) -> None:
         pass
+
 
 class ResultScreen(Screen):
     CSS = """
@@ -111,17 +112,37 @@ class ResultScreen(Screen):
         self.search_term = search_term
 
         # For the final ui we would need to get here the real search results
-        self.search_list = [("https://www.google.com/", "First Result Title", "A cool website desciption ig"), ("https://github.com/", "Second Result Title", "Another cool website desciption ig"),
-                            ("https://www.google.com/", "Third Result Title", "idk what to put here anymore XD"), ("https://www.google.com/", "Fourth Result Title", "..."),
-                            ("https://www.google.com/", "Third Result Title", "This allows us to test scrolling"), ("https://www.google.com/", "Fifth Result Title", "An finally done"),]
+        self.search_list = [
+            (
+                "https://www.google.com/",
+                "First Result Title",
+                "A cool website desciption ig",
+            ),
+            (
+                "https://github.com/",
+                "Second Result Title",
+                "Another cool website desciption ig",
+            ),
+            (
+                "https://www.google.com/",
+                "Third Result Title",
+                "idk what to put here anymore XD",
+            ),
+            ("https://www.google.com/", "Fourth Result Title", "..."),
+            (
+                "https://www.google.com/",
+                "Third Result Title",
+                "This allows us to test scrolling",
+            ),
+            ("https://www.google.com/", "Fifth Result Title", "An finally done"),
+        ]
 
     def compose(self) -> ComposeResult:
         yield Label(f"Results for: {self.search_term}", id="title")
         yield ListView(
             *[
                 ListItem(
-                    Label(title, classes="item-title"),
-                    Label(desc, classes="item-info")
+                    Label(title, classes="item-title"), Label(desc, classes="item-info")
                 )
                 for _, title, desc in self.search_list
             ]
@@ -136,9 +157,11 @@ class ResultScreen(Screen):
     def key_escape(self) -> None:
         self.app.pop_screen()
 
+
 class SearchEngine(App):
     def on_mount(self) -> None:
         self.push_screen(SearchScreen())
+
 
 if __name__ == "__main__":
     app = SearchEngine()

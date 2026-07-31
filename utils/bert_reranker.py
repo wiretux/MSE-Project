@@ -1,13 +1,14 @@
 import torch
-from transformers import AutoTokenizer, AutoModel, logging
+from transformers import AutoModel, AutoTokenizer, logging
 
 # Hide debugging info
 logging.set_verbosity_error()
 
 # Load the bert model
-tokenizer = AutoTokenizer.from_pretrained('bert-base-uncased')
-model = AutoModel.from_pretrained('bert-base-uncased')
+tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
+model = AutoModel.from_pretrained("bert-base-uncased")
 model.eval()
+
 
 def __get_mean_polled_embedding(bert_output, attention_mask):
     # Get the token vectors
@@ -30,21 +31,18 @@ def __get_mean_polled_embedding(bert_output, attention_mask):
 
     return mean_pooled.squeeze(0).tolist()
 
+
 def get_bert_embedding(text):
 
-    inputs = tokenizer(
-        text,
-        truncation=True,
-        return_tensors="pt"
-    )
+    inputs = tokenizer(text, truncation=True, return_tensors="pt")
 
     with torch.no_grad():
         output = model(**inputs)
 
-    return __get_mean_polled_embedding(output, inputs['attention_mask'])
+    return __get_mean_polled_embedding(output, inputs["attention_mask"])
+
 
 def bert_reranker(query_text: str, doc_embeddings_dict: dict):
-
     if not query_text or not doc_embeddings_dict:
         return []
 
@@ -53,7 +51,9 @@ def bert_reranker(query_text: str, doc_embeddings_dict: dict):
     doc_embeddings = torch.tensor(list(doc_embeddings_dict.values()))
 
     # Calculate the cosine similarity
-    cosine_scores = torch.nn.functional.cosine_similarity(query_embedding, doc_embeddings, dim=1)
+    cosine_scores = torch.nn.functional.cosine_similarity(
+        query_embedding, doc_embeddings, dim=1
+    )
 
     # Attach the scores to the docs
     ranked_results = [
@@ -68,15 +68,15 @@ def bert_reranker(query_text: str, doc_embeddings_dict: dict):
 
 
 # Example Documents
-#example_docs = {
+# example_docs = {
 #        'id1': 'some words the doc1 contains',
 #        'id2': 'some words the doc2 contains',
 #        'id3': 'some words more the doc3 contains'
 #    }
 
 # The Indexer should tokenize every doc first and store it in the db
-#example_embeddings_dict = {doc_id: get_bert_embedding(text) for doc_id, text in example_docs.items()}
+# example_embeddings_dict = {doc_id: get_bert_embedding(text) for doc_id, text in example_docs.items()}
 
 # Example query and test
-#example_query = "words contains"
-#print(bert_reranker(example_query, example_embeddings_dict))
+# example_query = "words contains"
+# print(bert_reranker(example_query, example_embeddings_dict))
