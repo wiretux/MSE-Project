@@ -2,7 +2,14 @@ from collections import Counter
 from uuid import UUID
 
 from utils import bert_reranker, storage
-from utils.text_preprocessor import preprocess_text
+from utils.text_preprocessor import is_mostly_english, preprocess_text
+
+
+def is_relevant(text: str, tokens: list[str]) -> bool:
+    return is_mostly_english(text) and (
+        "tuebingen" in tokens
+        or {"university", "eberhard", "karls"}.issubset(set(tokens))
+    )
 
 
 def index(doc_id: UUID, document: dict) -> bool:
@@ -15,7 +22,7 @@ def index(doc_id: UUID, document: dict) -> bool:
 
     tfs = list(Counter(tokens).items())
 
-    if len(tfs) < 1:
+    if len(tfs) < 1 or not is_relevant(full_doc_content, tokens):
         return False
 
     with storage.access() as store:

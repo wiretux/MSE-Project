@@ -33,6 +33,21 @@ def tokenize(text):
     return tokens
 
 
+# Check if a text is mostly english
+def is_mostly_english(text, threshold=0.5):
+    tokens = tokenize(text)
+
+    # Only keep alphabetic tokens (e.g. remove numbers, etc.)
+    tokens = [
+        lemmatizer.lemmatize(convert_german_umlaute(t)) for t in tokens if t.isalpha()
+    ]
+    if not tokens:
+        return False
+
+    ratio = sum(1 for t in tokens if t in _english_vocab) / len(tokens)
+    return ratio >= threshold
+
+
 # Pre-process text and split it into tokens
 def preprocess_text(text):
     # Splits the text into tokens and lowers it
