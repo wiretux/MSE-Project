@@ -228,7 +228,7 @@ class Storage:
 
         byte_ids = [doc_id.bytes for doc_id in doc_ids]
 
-        # TODO Extrect the data needed for the ui
+        # TODO Extract the data needed for the ui
 
         query = f"""
         SELECT id, url, title, description, length, depth
