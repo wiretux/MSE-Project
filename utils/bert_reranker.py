@@ -57,22 +57,14 @@ def bert_reranker(query_text: str, doc_embeddings_dict: dict):
 
     # Attach the scores to the docs
     ranked_results = [
-        {
-            'id': doc_id,
-            'score': score.item()
-        }
+        (doc_id, score.item())
         for score, doc_id in zip(cosine_scores, doc_embeddings_dict.keys())
     ]
 
     # Sort the docs descending by score
-    ranked_results.sort(key=lambda x: x['score'], reverse=True)
+    ranked_results.sort(key=lambda x: x[1], reverse=True)
 
-    # Replace the score by a ranking
-    for rank, doc in enumerate(ranked_results, start=1):
-        doc['rank'] = rank
-        del doc['score']
-
-    return ranked_results
+    return [doc_id for doc_id, score in ranked_results]
 
 
 # Example Documents
