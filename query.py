@@ -3,8 +3,8 @@ from utils.bert_reranker import bert_reranker
 from utils.bm25 import get_bm25
 
 
-def retrieve(query: str) -> [(dict, float)]:
-    first_results = get_bm25(query)
+def retrieve(query: str, limit: int = 100) -> [(dict, float)]:
+    first_results = get_bm25(query, limit)
     with storage.access() as store:
         embeddings = store.get_embedding([doc_id for doc_id, _ in first_results])
         reranked_results = bert_reranker(query, embeddings)

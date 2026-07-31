@@ -67,18 +67,3 @@ def bert_reranker(query_text: str, doc_embeddings_dict: dict) -> list[(UUID, flo
     ranked_results.sort(key=lambda x: x[1], reverse=True)
 
     return [(doc_id, score) for doc_id, score in ranked_results]
-
-
-# Example Documents
-# example_docs = {
-#        'id1': 'some words the doc1 contains',
-#        'id2': 'some words the doc2 contains',
-#        'id3': 'some words more the doc3 contains'
-#    }
-
-# The Indexer should tokenize every doc first and store it in the db
-# example_embeddings_dict = {doc_id: get_bert_embedding(text) for doc_id, text in example_docs.items()}
-
-# Example query and test
-# example_query = "words contains"
-# print(bert_reranker(example_query, example_embeddings_dict))

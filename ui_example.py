@@ -3,6 +3,8 @@ from textual.containers import Vertical
 from textual.screen import Screen
 from textual.widgets import Input, Label, ListItem, ListView
 
+from query import retrieve
+
 # TODO Make a good looking UI
 # This is just a quick and dirty example implementation!
 # The basics and structure can be used for a real implementation
@@ -113,28 +115,8 @@ class ResultScreen(Screen):
 
         # For the final ui we would need to get here the real search results
         self.search_list = [
-            (
-                "https://www.google.com/",
-                "First Result Title",
-                "A cool website desciption ig",
-            ),
-            (
-                "https://github.com/",
-                "Second Result Title",
-                "Another cool website desciption ig",
-            ),
-            (
-                "https://www.google.com/",
-                "Third Result Title",
-                "idk what to put here anymore XD",
-            ),
-            ("https://www.google.com/", "Fourth Result Title", "..."),
-            (
-                "https://www.google.com/",
-                "Third Result Title",
-                "This allows us to test scrolling",
-            ),
-            ("https://www.google.com/", "Fifth Result Title", "An finally done"),
+            (doc["url"], doc["title"], doc["description"])
+            for doc, score in retrieve(search_term)
         ]
 
     def compose(self) -> ComposeResult:

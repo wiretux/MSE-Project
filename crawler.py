@@ -263,4 +263,5 @@ with storage.access() as store:
     # Add Seed URLS at depth 0
     store.offer_frontier(("https://uni-tuebingen.de/en", 0))
 
-crawl()
+print(__crawl_site("https://uni-tuebingen.de/en/international/research/"))
+# crawl()
