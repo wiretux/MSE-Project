@@ -111,6 +111,30 @@ class Storage:
                 )
         self._db.commit()
 
+    def get_embedding(self, doc_ids: UUID | list[UUID]) -> dict[UUID, list[float]]:
+        if not doc_ids:
+            return {}
+
+        if not isinstance(doc_ids, list):
+            doc_ids = [doc_ids]
+
+        # Limit to 900 to stay below SQLites legacy 999 parameter limit.
+        # Fetching more embeddings at once should not be done in the first place.
+        if len(doc_ids) > 900:
+            raise ValueError(f'Too many document embeddings requested: {len(doc_ids)}. Maximum allowed is 900')
+
+        byte_ids = [doc_id.bytes for doc_id in doc_ids]
+
+        query = f"SELECT doc_id, embedding FROM embeddings WHERE doc_id IN ({','.join(['?'] * len(byte_ids))})"
+
+        self._cur.execute(query, byte_ids)
+        rows = self._cur.fetchall()
+
+        return {
+            UUID(bytes=byte_id): array.array('f', embedding_blob).tolist()
+            for byte_id, embedding_blob in rows
+        }
+
     def add_posting(self, doc_id: UUID, posting: (str, int) | list[(str, int)]):
         if not isinstance(posting, list):
             posting = [posting]
@@ -189,6 +213,42 @@ class Storage:
 
         # ({ doc_id: { terms: { term_id: term_frequency, ... }, length: length }, ... }, { term_id: idf, ... }, avg_document_length, total_document_count)
         return postings, term_meta, avg_length, total
+
+    def get_documents(self, doc_ids: UUID | list[UUID]) -> dict[UUID, dict]:
+        if not doc_ids:
+            return {}
+
+        if not isinstance(doc_ids, list):
+            doc_ids = [doc_ids]
+
+        # Limit to 900 to stay below SQLites legacy 999 parameter limit.
+        # Fetching more documents at once should not be done in the first place.
+        if len(doc_ids) > 900:
+            raise ValueError(f'Too many documents requested: {len(doc_ids)}. Maximum allowed is 900')
+
+        byte_ids = [doc_id.bytes for doc_id in doc_ids]
+
+        # TODO Extrect the data needed for the ui
+
+        query = f"""
+        SELECT id, url, title, description, length, depth
+        FROM documents
+        WHERE id IN ({','.join(['?'] * len(byte_ids))})
+        """
+
+        self._cur.execute(query, byte_ids)
+        rows = self._cur.fetchall()
+
+        return {
+        UUID(bytes=doc_id): {
+            "url": url,
+            "title": title if title is not None else "[Untitled]",
+            "description": description if description is not None else "[No description]",
+            "length": length,
+            "depth": depth
+            }
+            for doc_id, url, title, description, length, depth in rows
+        }
 
     def close(self):
         self._cur.close()
