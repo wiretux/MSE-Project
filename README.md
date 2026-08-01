@@ -41,7 +41,7 @@ Example:
 ```
 Then run the batch processor:
 ```
-python batch.py path/to/the/query-file [-o path/to/the/output-file]
+python batch.py [-o path/to/the/output-file] path/to/the/query-file 
 ```
 
 The output will look similar to this:
