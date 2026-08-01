@@ -43,7 +43,6 @@ def get_bm25(
                 numerator = tf * (k1 + 1)
                 denominator = tf + k1 * length_norm
                 score += idf * numerator / denominator
-                print(term_meta)
 
             # Store the doc_id its score in the result list
             results.append((doc_id, score))
