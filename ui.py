@@ -1,14 +1,10 @@
+from textual import work
 from textual.app import App, ComposeResult
 from textual.containers import Vertical
 from textual.screen import Screen
-from textual.widgets import Input, Label, ListItem, ListView
+from textual.widgets import Input, Label, ListItem, ListView, LoadingIndicator
 
 from query import retrieve
-
-# TODO Make a good looking UI
-# This is just a quick and dirty example implementation!
-# The basics and structure can be used for a real implementation
-
 
 class SearchScreen(Screen):
     CSS = """
@@ -113,22 +109,47 @@ class ResultScreen(Screen):
         super().__init__()
         self.search_term = search_term
 
-        # For the final ui we would need to get here the real search results
+        self.search_list: list[tuple[str, str, str]] = []
+
+    def on_mount(self) -> None:
+        self.perform_search()
+
+    @work(thread=True)
+    def perform_search(self) -> None:
+        results = retrieve(self.search_term)
+
+        self.app.call_from_thread(self.update_results, results)
+
+    def update_results(self, results) -> None:
         self.search_list = [
             (doc["url"], doc["title"], doc["description"])
-            for doc, score in retrieve(search_term)
+            for doc, score in results
         ]
+
+        # Hide loading spinner
+        loader = self.query_one("#loader", LoadingIndicator)
+        loader.display = False
+
+        # Populate ListView when ready
+        list_view = self.query_one("#results-list", ListView)
+        if self.search_list:
+            for _, title, desc in self.search_list:
+                list_view.append(
+                    ListItem(
+                        Label(title, classes="item-title"),
+                        Label(desc, classes="item-info"),
+                    )
+                )
+        else:
+            list_view.append(
+                    Label('No results found :(')
+                )
+
 
     def compose(self) -> ComposeResult:
         yield Label(f"Results for: {self.search_term}", id="title")
-        yield ListView(
-            *[
-                ListItem(
-                    Label(title, classes="item-title"), Label(desc, classes="item-info")
-                )
-                for _, title, desc in self.search_list
-            ]
-        )
+        yield LoadingIndicator(id="loader")
+        yield ListView(id="results-list")
         yield Label("Press ESC to go back", id="exit-label")
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
