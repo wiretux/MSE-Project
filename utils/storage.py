@@ -10,7 +10,7 @@ from uuid import UUID, uuid7
 class DocumentStatus(IntEnum):
     PENDING = (0,)
     QUEUED = (1,)
-    INDEXED = (2,)
+    CACHED = (2,)
     READY = (3,)
     SKIPPED = (254,)
     ERROR = 255
@@ -51,13 +51,10 @@ class Storage:
 
         self._cur.execute(f"""UPDATE documents
         SET status = {DocumentStatus.PENDING}
-        WHERE status < {DocumentStatus.READY}""")
+        WHERE status == {DocumentStatus.QUEUED} OR
+        status == {DocumentStatus.ERROR}""")
 
         self._db.commit()
-
-    # TODO: Store metadata for domains to prevent spider linking
-    def add_netloc(self, netloc: str):
-        pass
 
     def offer_frontier(self, link: (str, int) | list[(str, int)]):
         if not isinstance(link, list):
@@ -94,6 +91,16 @@ class Storage:
 
         results = self._cur.execute(query, [max_depth, max]).fetchall()
         self._db.commit()
+        return [(UUID(bytes=byte_id), url, depth) for byte_id, url, depth in results]
+
+    def get_cache(self, max_depth: int = 0):
+        query = f"""SELECT id, url, depth
+        FROM documents
+        WHERE status = {DocumentStatus.CACHED} AND depth <= ?
+        ORDER BY depth
+        """
+
+        results = self._cur.execute(query, [max_depth]).fetchall()
         return [(UUID(bytes=byte_id), url, depth) for byte_id, url, depth in results]
 
     def update_status(

@@ -1,11 +1,22 @@
-from queue import Queue, ShutDown
-from threading import Thread
+from collections.abc import Callable
+from pathlib import Path
+from queue import Empty, Queue, ShutDown
+from threading import Thread, current_thread
+from time import sleep
 from urllib.parse import urljoin, urlsplit, urlunsplit
-from urllib.request import Request, URLError, urlopen
 from urllib.robotparser import RobotFileParser
 
+import requests
+import urllib3
 from bs4 import BeautifulSoup
-from rich.progress import Progress
+from requests.exceptions import ConnectionError, RequestException
+from rich.progress import (
+    BarColumn,
+    DownloadColumn,
+    Progress,
+    TextColumn,
+    TimeRemainingColumn,
+)
 
 from indexer import index
 from utils import storage
@@ -13,10 +24,26 @@ from utils import storage
 USER_AGENT = "MSE-Crawler"  # User Agent used when crawling
 CRAWL_DEPTH = 1  # Maximum distance/depth crawler may deviate from seed urls
 CRAWL_TIMEOUT = 5  # Timeout in seconds
-CRAWLER_COUNT = 2
-CRAWLER_DELAY = 0.01
+CRAWLER_COUNT = 12
+CRAWLER_DELAY = 0.05
+CHUNK_SIZE = 16384  # 16KiB
 MAX_DOCUMENT_SIZE = 2 * 1024 * 1024  # Document limit in bytes (2MiB)
-# MAX_PATH_DEPTH = 8 Maybe?
+CLEANUP_ON_INDEX = True
+IGNORE_SSL = False
+
+# Prevent the constant nagging about SSL verification
+if IGNORE_SSL:
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+    print(
+        "Running without SSL verification - This can cause authenticity/security issues..."
+    )
+
+
+class DocumentTooLargeError(Exception):
+    """
+    Custom exception raised to indicate, that a document exceeds the defined
+    upper document size.
+    """
 
 
 def __clean_url(url: str) -> str | None:
@@ -31,53 +58,101 @@ def __clean_url(url: str) -> str | None:
     return None
 
 
+def __download_with_limit(
+    site_url: str,
+    file_path: str,
+    cb0: Callable[[int], None] | None = None,
+    cb1: Callable[[int], None] | None = None,
+    limit: int = MAX_DOCUMENT_SIZE,
+):
+    res = requests.get(
+        site_url,
+        headers={"User-Agent": USER_AGENT, "Accept-Language": "en"},
+        stream=True,
+        timeout=CRAWL_TIMEOUT,
+        verify=not IGNORE_SSL,
+    )
+    res.raise_for_status()
+
+    try:
+        reported_total = int(res.headers.get("content-length", 0))
+    # If the server sends something malformed default to 0
+    except (ValueError, TypeError):
+        reported_total = 0
+
+    if reported_total > MAX_DOCUMENT_SIZE:
+        raise DocumentTooLargeError(
+            f"Document at {site_url} exceeds the limit of {MAX_DOCUMENT_SIZE} bytes."
+        )
+
+    if cb0:
+        cb0(reported_total)
+
+    total_bytes = 0
+    with open(file_path, "wb") as f:
+        for chunk in res.iter_content(chunk_size=CHUNK_SIZE):
+            if chunk:
+                total_bytes += len(chunk)
+                if cb1:
+                    cb1(len(chunk))
+
+                if total_bytes >= MAX_DOCUMENT_SIZE:
+                    raise DocumentTooLargeError(
+                        f"Document at {site_url} exceeds the limit of {MAX_DOCUMENT_SIZE} bytes."
+                    )
+                f.write(chunk)
+
+
 def __parse_robots(site_url: str) -> RobotFileParser:
     """
     Tries to read/get the robots.txt
     Defaults to allow everything, if parsing fails. (Not Found/Invalid Cert)
     """
-    rp = RobotFileParser(urlunsplit(urlsplit(site_url)._replace(path="/robots.txt")))
+    url_seg = urlsplit(site_url)
+    robots_path = f"cache/robots/{Path(url_seg.netloc).name}"
+    robots_file = Path(robots_path)
+    rp = RobotFileParser()
 
     try:
-        rp.read()
-    except URLError:
+        if not robots_file.is_file():
+            __download_with_limit(
+                urlunsplit(url_seg._replace(path="/robots.txt")), robots_path
+            )
+
+        with open(robots_path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+
+        rp.parse(lines)
+    except (
+        RequestException,
+        ConnectionError,
+        DocumentTooLargeError,
+        UnicodeDecodeError,
+    ):
+        # Create an empty file to avoid unneeded requests
+        if robots_file.is_file():
+            robots_file.unlink()
+
+        robots_file.touch()
+        rp = RobotFileParser()
+        rp.parse([])
+    except (FileNotFoundError, PermissionError, OSError):
+        print(f"Failed to create file at {robots_path}...")
+        rp = RobotFileParser()
         rp.parse([])
 
     return rp
 
 
-def __fetch_document(site_url: str) -> str | None:
-    """
-    Fetches document from the specified site_url
-    """
-    req = Request(site_url, headers={"User-Agent": USER_AGENT, "Accept-Language": "en"})
-    with urlopen(req, timeout=CRAWL_TIMEOUT) as res:
-        content_length = res.headers.get("Content-Length")
-        if content_length and int(content_length) > MAX_DOCUMENT_SIZE:
-            raise ValueError("Document exceeds size limit")
-
-        chunks = []
-        total_bytes = 0
-        while total_bytes < MAX_DOCUMENT_SIZE:
-            chunk = res.read(8192)
-            if not chunk:  # EOF
-                break
-
-            total_bytes += len(chunk)
-
-            # TODO: Should we raise an error or try to parse the first 2MiB
-            if total_bytes >= MAX_DOCUMENT_SIZE:
-                raise ValueError("Document exceeds size limit")
-
-            chunks.append(chunk)
-        return b"".join(chunks).decode("utf-8", errors="replace")
-
-
-def __parse_document(document: str, site_url: str) -> (str, list[str], str, str):
+def __parse_document(cache_path: str, site_url: str) -> dict | None:
     """
     Extracts text content and links from a given document.
     """
-    soup = BeautifulSoup(document, "html.parser")
+    try:
+        with open(cache_path, "r", encoding="utf-8") as document:
+            soup = BeautifulSoup(document, "html.parser")
+    except (FileNotFoundError, PermissionError, OSError):
+        return None
 
     title = soup.title.extract().string if soup.title else None
 
@@ -109,158 +184,217 @@ def __parse_document(document: str, site_url: str) -> (str, list[str], str, str)
         else:
             element.decompose()
 
-    return title, desc, soup.get_text(separator=" ", strip=True), links
+    return {
+        "title": title,
+        "desc": desc,
+        "content": soup.get_text(separator=" ", strip=True),
+        "links": links,
+    }
 
 
-def __crawl_site(site_url: str, depth: int = 0) -> dict | None:
-    if depth > CRAWL_DEPTH:
-        return None
-
-    site_url = __clean_url(site_url)
-    # netloc = urlsplit(site_url).netloc
-
-    rp = __parse_robots(site_url)
-
-    # TODO: Try to delay crawling of certain page
-    # delay = rp.crawl_delay(USER_AGENT)
-    can_fetch = rp.can_fetch(USER_AGENT, site_url)
-
-    if can_fetch:
-        title, desc, content, links = __parse_document(
-            __fetch_document(site_url), site_url
-        )
-
-        # TODO: Limit execessive link usage
-        # insite_links, outsite_links = [], []
-        # for link in links:
-        #    if urlsplit(link).netloc == site_netloc and len(insite_links) < 200:
-        #        insite_links.append(link)
-        #    else:
-        #        outsite_links.append(link)
-
-        return {
-            "title": title,  # TODO: Get title from document
-            "desc": desc,  # TODO: Get description from document
-            "content": content,
-            # Don't add new links past CRAWL_DEPTH
-            "links": links,
-        }
-
-    return None
-
-
-def crawler(queue: Queue, outqueue: Queue):
-    try:
-        while (item := queue.get()) is not None:
-            doc_id, url, depth = item
+def __download_worker(
+    frontier: Queue,
+    index_queue: Queue,
+    d_progress: Progress,
+    d_task_id: int,
+    i_task_id: int,
+):
+    with storage.access() as store:
+        while True:
             try:
-                site = __crawl_site(url, depth)
-                outqueue.put(
-                    (
-                        doc_id,  # doc_id
-                        site,  # site
-                        depth,  # depth
-                        None,  # error
-                    )
+                doc_id, site_url, depth = frontier.get(timeout=120)
+            except Empty:
+                print(
+                    "Worker timed out, either the indexing took too long or there might be an issue.",
+                    "Try again and restart the crawler process to hopefully fix this issue.",
                 )
-            except URLError as e:
-                outqueue.put(
-                    (
-                        doc_id,  # doc_id
-                        None,  # site
-                        depth,  # depth
-                        e,  # error
-                    )
+                break
+            except ShutDown:
+                break
+
+            try:
+                with Progress(
+                    DownloadColumn(),
+                    BarColumn(),
+                    TextColumn("[bold blue]{task.description}"),
+                    TimeRemainingColumn(),
+                ) as progress:
+                    task_info = [None]
+
+                    def cb0(
+                        total: int,
+                        task_info: list = task_info,
+                        site_url: str = site_url,
+                    ):
+                        task_info[0] = progress.add_task(site_url, total=total)
+
+                    def cb1(chunk_size: int, task_info: list = task_info):
+                        progress.advance(task_info[0], chunk_size)
+
+                    __download_with_limit(site_url, f"cache/crawler/{doc_id}", cb0, cb1)
+                    store.update_status(doc_id, storage.DocumentStatus.CACHED)
+                    sleep(CRAWLER_DELAY)
+            except (RequestException, ConnectionError, DocumentTooLargeError) as e:
+                print(
+                    f"[{current_thread().name}] Failed to download document from {site_url}:\n\t{e}"
                 )
-            queue.task_done()
-    except ShutDown:
-        pass
+
+                # Cleanup partial files
+                file = Path(f"cache/crawler/{doc_id}")
+                if file.is_file():
+                    file.unlink()
+            except (FileNotFoundError, PermissionError, OSError) as e:
+                print(
+                    f"[{current_thread().name}] Failed to cache document - Exiting...\n\t{e}"
+                )
+                break
+            finally:
+                index_queue.put((doc_id, site_url, depth, i_task_id))
+                d_progress.advance(d_task_id, 1)
+                frontier.task_done()
 
 
-def index_consumer(queue: Queue):
-    try:
-        with Progress() as progress:
-            task_map = {}
+def __index_worker(queue: Queue, progress: Progress):
+    with storage.access() as store:
+        while True:
+            try:
+                doc_id, site_url, depth, task_id = queue.get(timeout=120)
+            except Empty:
+                print(
+                    "Indexer timed out, either the indexing took too long or there might be an issue.",
+                    "Try again and restart the crawler process to hopefully fix this issue.",
+                )
+                break
+            except ShutDown:
+                break
 
-            with storage.access() as store:
-                while (item := queue.get()) is not None:
-                    doc_id, site, depth, e = item
+            try:
+                site = __parse_document(f"cache/crawler/{doc_id}", site_url)
+                if site:
+                    if site["content"] and index(doc_id, site):
+                        store.update_status(doc_id, storage.DocumentStatus.READY)
+                    else:
+                        store.update_status(doc_id, storage.DocumentStatus.SKIPPED)
 
-                    if depth not in task_map:
-                        task_map[depth] = progress.add_task(
-                            f"{depth} - Depth", total=store.count_frontier(depth)
+                    # Add links to frontier
+                    if site["links"]:
+                        netlocs = {
+                            urlunsplit(urlsplit(link)._replace(path=""))
+                            for link in site["links"]
+                        }
+                        robots = {
+                            urlsplit(netloc).netloc: __parse_robots(netloc)
+                            for netloc in netlocs
+                        }
+
+                        # Append filtered links to frontier
+                        store.offer_frontier(
+                            [
+                                (link, depth + 1)
+                                for link in site["links"]
+                                if robots[urlsplit(link).netloc].can_fetch(
+                                    USER_AGENT, link
+                                )
+                            ]
                         )
 
-                    # If there is error store error status in DB
-                    if e is None:
-                        # If there is content index else status skipped
-                        if site and site["content"] and index(doc_id, site):
-                            store.update_status(doc_id, storage.DocumentStatus.READY)
-                        else:
-                            store.update_status(doc_id, storage.DocumentStatus.SKIPPED)
+                else:
+                    store.update_status(doc_id, storage.DocumentStatus.ERROR)
+            except (
+                FileNotFoundError,
+                PermissionError,
+                OSError,
+                RequestException,
+                ConnectionError,
+                DocumentTooLargeError,
+            ):
+                store.update_status(doc_id, storage.DocumentStatus.ERROR)
+            finally:
+                try:
+                    file_path = Path(f"cache/crawler/{doc_id}")
+                    if CLEANUP_ON_INDEX and file_path.is_file():
+                        file_path.unlink()
+                except (FileNotFoundError, PermissionError, OSError):
+                    pass
 
-                        # Add links to frontier
-                        if site and site["links"]:
-                            store.offer_frontier(
-                                [(link, depth + 1) for link in site["links"]]
-                            )
-                    else:
-                        store.update_status(doc_id, storage.DocumentStatus.ERROR)
-
-                    progress.advance(task_map[depth], 1)
-                    queue.task_done()
-    except ShutDown:
-        pass
+                progress.advance(task_id, 1)
+                queue.task_done()
 
 
 def crawl():
-    frontier_queue = Queue(maxsize=24)
-    index_queue = Queue(maxsize=24)
+    # Ensure cache dirs are present
+    for cache_dir in ["robots", "crawler"]:
+        Path(f"cache/{cache_dir}").mkdir(parents=True, exist_ok=True)
 
-    crawlers = []
-    consumer = Thread(target=index_consumer, args=(index_queue,))
-    consumer.start()
-
-    for _ in range(CRAWLER_COUNT):
-        crawlers.append(
-            Thread(
-                target=crawler,
-                args=(
-                    frontier_queue,
-                    index_queue,
-                ),
-            )
+    with storage.access() as store, Progress() as progress:
+        index_queue = Queue(maxsize=1000)
+        indexer = Thread(
+            target=__index_worker,
+            args=(
+                index_queue,
+                progress,
+            ),
         )
-        crawlers[-1].start()
+        indexer.start()
 
-    with storage.access() as store:
         for depth in range(CRAWL_DEPTH + 1):
-            while frontier := store.poll_frontier(50, depth):
-                for task in frontier:
-                    frontier_queue.put(task)
+            total = store.count_frontier(depth)
+            cached_docs = store.get_cache(depth)
 
-            # Make sure we don't overlap depth, so we can
-            # get the total amount of sites to crawl for
-            # any given depth
-            frontier_queue.join()
+            if total > 0:
+                task_id = progress.add_task(f"[Download] {depth} - Depth", total=total)
+                index_task_id = progress.add_task(
+                    f"[Index] {depth} - Depth", total=total + len(cached_docs)
+                )
+
+                frontier_queue = Queue(maxsize=CRAWLER_COUNT * 2)
+                crawlers = []
+
+                for i in range(CRAWLER_COUNT):
+                    t = Thread(
+                        target=__download_worker,
+                        args=(
+                            frontier_queue,
+                            index_queue,
+                            progress,
+                            task_id,
+                            index_task_id,
+                        ),
+                        name=f"Crawler-{i}",
+                    )
+                    crawlers.append(t)
+                    t.start()
+
+                while frontier := store.poll_frontier(50, depth):
+                    for task in frontier:
+                        frontier_queue.put(task)
+
+                # Make sure we don't overlap depth, so we can
+                # get the total amount of sites to crawl for
+                # any given depth
+                frontier_queue.join()
+                frontier_queue.shutdown()
+                for c in crawlers:
+                    c.join()
+
+            # Append cached docs to indexing Queue
+            for cached_doc in cached_docs:
+                doc_id, site_url, depth = cached_doc
+                index_queue.put((doc_id, site_url, depth, index_task_id))
+
             index_queue.join()
 
-    frontier_queue.shutdown()
     index_queue.shutdown()
-
-    for c in crawlers:
-        c.join()
-    consumer.join()
+    indexer.join()
 
     with storage.access() as store:
         print("Crawling/Indexing complete")
         print(f"Sites indexed: {store.count_index()}")
 
 
-# TODO: Move this to the main file later
 with storage.access() as store:
     store.init()
     # Add Seed URLS at depth 0
     store.offer_frontier(("https://uni-tuebingen.de/en", 0))
 
- crawl()
+crawl()

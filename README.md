@@ -8,7 +8,7 @@ We recommend using [uv](https://github.com/astral-sh/uv). A modern, fast Python 
 
 Set up your virtual environment and install dependencies:
 ```
-uv venv -python 3.14
+uv venv --python 3.14
 source .venv/bin/activate
 uv pip install torch --index-url https://download.pytorch.org/whl/cpu
 uv pip install -r requirements.txt
@@ -24,7 +24,7 @@ python crawler.py
 # UI
 Launch the Terminal User Interface (TUI) to search interactively:
 ```
-python ui.py
+python ui_example.py
 ```
 
 # Batch queries
