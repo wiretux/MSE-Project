@@ -1,10 +1,16 @@
+import math
+
 from utils import storage
 from utils.bert_reranker import bert_reranker
 from utils.bm25 import get_bm25
 
+# Start off with 5 * limit
+# Rerank pages with BERT to limit
+# Sort pages based on BERT and pagerank
 
-def retrieve(query: str, limit: int = 100) -> [(dict, float)]:
-    first_results = get_bm25(query, limit)
+
+def retrieve(query: str, limit: int = 100, skew: float = 0.3) -> [(dict, float)]:
+    first_results = get_bm25(query, 5 * limit)
 
     if not first_results:
         return []
@@ -16,11 +22,13 @@ def retrieve(query: str, limit: int = 100) -> [(dict, float)]:
 
     combined_scores = dict(reranked_results)
 
-    bm25_max = max(first_results, key=lambda x: x[1])[1]
-    bm25_norm = 1 / (bm25_max if bm25_max and bm25_max > 0 else 1)
+    pr_norm = 1 / math.log(
+        max(result_docs.values(), key=lambda x: x["rank"])["rank"] + 1
+    )
 
-    for doc_id, score in first_results:
-        combined_scores[doc_id] *= score * bm25_norm
+    for doc_id, score in combined_scores.items():
+        rank = math.log(result_docs[doc_id]["rank"] + 1)
+        combined_scores[doc_id] = (1.0 - skew) * score + skew * rank * pr_norm
 
     return sorted(
         [

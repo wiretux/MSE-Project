@@ -18,7 +18,7 @@ def get_bm25(
     with storage.access() as store:
         # Get the bm25 relevant data from the db
         postings, term_meta, avg_length, total_docs = store.get_postings(
-            query_tokens, max=200
+            query_tokens, max=2 * limit
         )
 
         # If there is no average length no ranking is possible

@@ -54,7 +54,7 @@ def __clean_url(url: str) -> str | None:
     """
     parsed = urlsplit(url)._replace(query="", fragment="")
     if parsed.scheme.lower() in ["http", "https"]:
-        return urlunsplit(parsed)
+        return urlunsplit(parsed).rstrip("/")
     return None
 
 
@@ -109,7 +109,7 @@ def __parse_robots(site_url: str) -> RobotFileParser:
     Defaults to allow everything, if parsing fails. (Not Found/Invalid Cert)
     """
     url_seg = urlsplit(site_url)
-    robots_path = f"cache/robots/{Path(url_seg.netloc).name}"
+    robots_path = f".cache/robots/{Path(url_seg.netloc).name}"
     robots_file = Path(robots_path)
     rp = RobotFileParser()
 
@@ -231,7 +231,7 @@ def __download_worker(
                     def cb1(chunk_size: int, task_info: list = task_info):
                         progress.advance(task_info[0], chunk_size)
 
-                    __download_with_limit(site_url, f"cache/crawler/{doc_id}", cb0, cb1)
+                    __download_with_limit(site_url, f".cache/crawler/{doc_id}", cb0, cb1)
                     store.update_status(doc_id, storage.DocumentStatus.CACHED)
                     sleep(CRAWLER_DELAY)
             except (RequestException, ConnectionError, DocumentTooLargeError) as e:
@@ -240,7 +240,7 @@ def __download_worker(
                 )
 
                 # Cleanup partial files
-                file = Path(f"cache/crawler/{doc_id}")
+                file = Path(f".cache/crawler/{doc_id}")
                 if file.is_file():
                     file.unlink()
             except (FileNotFoundError, PermissionError, OSError) as e:
@@ -269,7 +269,7 @@ def __index_worker(queue: Queue, progress: Progress):
                 break
 
             try:
-                site = __parse_document(f"cache/crawler/{doc_id}", site_url)
+                site = __parse_document(f".cache/crawler/{doc_id}", site_url)
                 if site:
                     if site["content"] and index(doc_id, site):
                         store.update_status(doc_id, storage.DocumentStatus.READY)
@@ -295,7 +295,8 @@ def __index_worker(queue: Queue, progress: Progress):
                                 if robots[urlsplit(link).netloc].can_fetch(
                                     USER_AGENT, link
                                 )
-                            ]
+                            ],
+                            doc_id,
                         )
 
                 else:
@@ -311,7 +312,7 @@ def __index_worker(queue: Queue, progress: Progress):
                 store.update_status(doc_id, storage.DocumentStatus.ERROR)
             finally:
                 try:
-                    file_path = Path(f"cache/crawler/{doc_id}")
+                    file_path = Path(f".cache/crawler/{doc_id}")
                     if CLEANUP_ON_INDEX and file_path.is_file():
                         file_path.unlink()
                 except (FileNotFoundError, PermissionError, OSError):
@@ -324,7 +325,7 @@ def __index_worker(queue: Queue, progress: Progress):
 def crawl():
     # Ensure cache dirs are present
     for cache_dir in ["robots", "crawler"]:
-        Path(f"cache/{cache_dir}").mkdir(parents=True, exist_ok=True)
+        Path(f".cache/{cache_dir}").mkdir(parents=True, exist_ok=True)
 
     with storage.access() as store, Progress() as progress:
         index_queue = Queue(maxsize=1000)
@@ -341,12 +342,11 @@ def crawl():
             total = store.count_frontier(depth)
             cached_docs = store.get_cache(depth)
 
+            task_id = progress.add_task(f"[Download] {depth} - Depth", total=total)
+            index_task_id = progress.add_task(
+                f"[Index] {depth} - Depth", total=total + len(cached_docs)
+            )
             if total > 0:
-                task_id = progress.add_task(f"[Download] {depth} - Depth", total=total)
-                index_task_id = progress.add_task(
-                    f"[Index] {depth} - Depth", total=total + len(cached_docs)
-                )
-
                 frontier_queue = Queue(maxsize=CRAWLER_COUNT * 2)
                 crawlers = []
 
@@ -388,6 +388,7 @@ def crawl():
     indexer.join()
 
     with storage.access() as store:
+        store.rank_pages()
         print("Crawling/Indexing complete")
         print(f"Sites indexed: {store.count_index()}")
 

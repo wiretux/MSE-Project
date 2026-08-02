@@ -29,7 +29,14 @@ class Storage:
             description TEXT,
             length INTEGER,
             depth INTEGER NOT NULL,
+            rank REAL NOT NULL DEFAULT 0,
             status INTEGER NOT NULL DEFAULT 0
+        ) STRICT, WITHOUT ROWID""")
+
+        self._cur.execute("""CREATE TABLE IF NOT EXISTS links (
+            source BLOB REFERENCES doc(id) NOT NULL,
+            target BLOB REFERENCES doc(id) NOT NULL,
+            PRIMARY KEY (source, target)
         ) STRICT, WITHOUT ROWID""")
 
         self._cur.execute("""CREATE TABLE IF NOT EXISTS terms (
@@ -49,6 +56,7 @@ class Storage:
             embedding BLOB NOT NULL
         ) STRICT, WITHOUT ROWID""")
 
+        # Retry stale or broken documents
         self._cur.execute(f"""UPDATE documents
         SET status = {DocumentStatus.PENDING}
         WHERE status == {DocumentStatus.QUEUED} OR
@@ -56,14 +64,33 @@ class Storage:
 
         self._db.commit()
 
-    def offer_frontier(self, link: (str, int) | list[(str, int)]):
+    def offer_frontier(
+        self, link: (str, int) | list[(str, int)], doc_id: str | None = None
+    ):
         if not isinstance(link, list):
             link = [link]
+
+        # Avoid inserts for nonexistent links
+        if len(link) < 1:
+            return
 
         self._cur.executemany(
             "INSERT INTO documents (id, url, depth) VALUES (?, ?, ?) ON CONFLICT DO NOTHING",
             [(uuid7().bytes, url, depth) for url, depth in link],
         )
+
+        if doc_id:
+            self._cur.execute(
+                f"""WITH target_ids AS (
+                    SELECT id FROM documents
+                    WHERE url IN ({",".join(["?"] * len(link))})
+                ) INSERT INTO links (source, target) 
+                SELECT ?, id FROM target_ids
+                WHERE 1
+                ON CONFLICT DO NOTHING
+                """,
+                [url for url, _ in link] + [doc_id.bytes],
+            )
         self._db.commit()
 
     def count_frontier(self, depth: int = 0):
@@ -134,6 +161,55 @@ class Storage:
         )
         self._db.commit()
 
+    def rank_pages(self, iterations: int = 20, d_factor: float = 0.85):
+        # Reset page rank
+        self._cur.execute(f"""UPDATE documents
+            SET rank = 1.0 / total
+            FROM (SELECT count(*) AS total FROM documents WHERE status = {DocumentStatus.READY})
+            WHERE status = {DocumentStatus.READY}
+        """)
+        self._db.commit()
+
+        self._cur.execute(
+            f"SELECT count(*) AS N FROM documents WHERE status = {DocumentStatus.READY}"
+        )
+        corpus_meta = self._cur.fetchone()
+
+        # No valid documents in corpus, abort...
+        if corpus_meta is None or corpus_meta[0] < 1:
+            return
+
+        N = corpus_meta[0]
+
+        for i in range(iterations):
+            self._cur.execute(f"""
+                WITH ready_links AS (
+                    SELECT links.* FROM links
+                    JOIN documents ds
+                        ON ds.id = links.source
+                        AND ds.status = {DocumentStatus.READY}
+                    JOIN documents dt
+                        ON dt.id = links.target
+                        AND dt.status = {DocumentStatus.READY}
+                ), out_docs AS (
+                    SELECT source AS id, count(*) AS count
+                    FROM ready_links
+                    GROUP BY source
+                ), in_docs AS (
+                    SELECT rl.target AS id,
+                        sum(d.rank / od.count) AS sum_rank
+                    FROM ready_links as rl
+                    JOIN documents d ON rl.source = d.id
+                    JOIN out_docs AS od ON rl.source = od.id
+                    GROUP BY rl.target
+                ) UPDATE documents
+                    SET rank = {(1 - d_factor) / N} + {d_factor} * COALESCE(id.sum_rank, 0)
+                FROM documents d
+                LEFT JOIN in_docs id ON d.id = id.id
+                WHERE documents.id = d.id AND documents.status = {DocumentStatus.READY}
+            """)
+        self._db.commit()
+
     def get_embedding(self, doc_ids: UUID | list[UUID]) -> dict[UUID, list[float]]:
         if not doc_ids:
             return {}
@@ -188,7 +264,6 @@ class Storage:
     def get_postings(
         self, terms: list[str], max: int = 2000
     ) -> (dict, dict, float, int):
-        # TODO: Maybe replace pre-score with term-/posting-level filter
         query = f"""
         WITH corpus_meta AS (
             SELECT count(*) AS N,
@@ -243,7 +318,6 @@ class Storage:
             UUID(hex=term_id): idf for term_id, idf in json.loads(term_meta).items()
         }
 
-        # ({ doc_id: { terms: { term_id: term_frequency, ... }, length: length }, ... }, { term_id: idf, ... }, avg_document_length, total_document_count)
         return postings, term_meta, avg_length, total
 
     def get_documents(self, doc_ids: UUID | list[UUID]) -> dict[UUID, dict]:
@@ -262,10 +336,8 @@ class Storage:
 
         byte_ids = [doc_id.bytes for doc_id in doc_ids]
 
-        # TODO Extract the data needed for the ui
-
         query = f"""
-        SELECT id, url, title, description, length, depth
+        SELECT id, url, title, description, length, depth, rank
         FROM documents
         WHERE id IN ({",".join(["?"] * len(byte_ids))})
         """
@@ -282,8 +354,9 @@ class Storage:
                 else "[No description]",
                 "length": length,
                 "depth": depth,
+                "rank": rank,
             }
-            for doc_id, url, title, description, length, depth in rows
+            for doc_id, url, title, description, length, depth, rank in rows
         }
 
     def close(self):
