@@ -7,6 +7,10 @@ from textual.widgets import Input, Label, ListItem, ListView, LoadingIndicator
 from query import retrieve
 
 
+MAX_TITLE_LENGTH = 100
+MAX_URL_LENGTH = 80
+MAX_DESC_LENGTH = 150
+
 class SearchScreen(Screen):
     # Styling for the search home screen: centered card, input box, and history list below it.
     CSS = """
@@ -56,13 +60,13 @@ class SearchScreen(Screen):
         width: 100%;
         height: auto;
         max-height: 10;
+        background: transparent;
     }
 
     #history-list > ListItem {
         width: 100%;
         height: auto;
         margin-top: 1;
-        padding: 0 1;
         background: $boost;
         border: round $primary;
     }
@@ -147,10 +151,11 @@ class ResultScreen(Screen):
 
     #result-list {
         width: 80%;
-        max-width: 72;
+        max-width: 100;
         height: 1fr;
         margin-top: 1;
-        align-horizontal: center;
+        margin-bottom: 1;
+        background: transparent;
     }
 
     #result-list > ListItem {
@@ -167,10 +172,32 @@ class ResultScreen(Screen):
         border: round $success;
     }
 
-    #result-list > ListItem > Label {
-        width: 1fr;
-        text-align: center;
+    #result-list > ListItem Vertical {
+        width: 100%;
+        height: auto;
+    }
+
+    /* Fix label sizing and ensure text wraps properly instead of cutting off */
+    #result-list > ListItem Label {
+        width: 100%;
+        height: auto;
+    }
+
+    .result-title {
         text-style: bold;
+        color: $success;
+    }
+
+    .result-desc {
+        color: $text-muted;
+        margin-top: 1;
+    }
+
+    .result-url {
+        width: 100%;
+        height: auto;
+        color: $text-disabled;
+        text-style: italic;
     }
 
     #title {
@@ -204,20 +231,42 @@ class ResultScreen(Screen):
         results = retrieve(self.search_term)
         self.app.call_from_thread(self.update_results, results)
 
+    # Shortens a text
+    @staticmethod
+    def shorten_text(text: str, limit: int) -> str:
+        return ((text[:limit - 3] + "...")
+                if len(text) > limit
+                else text)
+
     # Hide the loading spinner and show the results (or a "no results" message).
-    def update_results(self, results) -> None:
-        self.search_list = [
-            (doc["url"], doc["title"], doc["description"])
-            for doc, score in results
-        ]
+    def update_results(self, results: list) -> None:
+        self.search_list = []
+        for doc, score in results:
+            url = doc["url"]
+            title = doc.get("title", "Untitled")
+            desc = doc.get("description")
+
+            if desc in [None, "", "[No description]"]:
+                desc = "No description provided"
+
+
+            self.search_list.append((url, title, desc))
 
         loader = self.query_one("#loader", LoadingIndicator)
         loader.display = False
 
         list_view = self.query_one("#result-list", ListView)
         if self.search_list:
-            for _, title, desc in self.search_list:
-                list_view.append(ListItem(Label(title)))
+            for url, title, desc in self.search_list:
+                list_view.append(
+                    ListItem(
+                        Vertical(
+                            Label(self.shorten_text(title, MAX_TITLE_LENGTH), classes="result-title"),
+                            Label(self.shorten_text(url, MAX_URL_LENGTH), classes="result-url"),
+                            Label(self.shorten_text(desc, MAX_DESC_LENGTH), classes="result-desc")
+                        )
+                    )
+                )
         else:
             list_view.append(ListItem(Label("No results found :(")))
 
@@ -226,7 +275,7 @@ class ResultScreen(Screen):
         yield Label(f"Results for: {self.search_term}", id="title")
         yield LoadingIndicator(id="loader")
         yield ListView(id="result-list")
-        yield Label("Press ESC to go back", id="exit-label")
+        yield Label("Press ESC to go back | Press Ctrl+Q to exit", id="exit-label")
 
     # Open the URL of the selected result.
     def on_list_view_selected(self, event: ListView.Selected) -> None:
