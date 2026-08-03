@@ -17,7 +17,7 @@ def retrieve(query: str, limit: int = 100, skew: float = 0.3) -> [(dict, float)]
 
     with storage.access() as store:
         embeddings = store.get_embedding([doc_id for doc_id, _ in first_results])
-        reranked_results = bert_reranker(query, embeddings)
+        reranked_results = bert_reranker(query, embeddings)[:limit]
         result_docs = store.get_documents([doc_id for doc_id, _ in reranked_results])
 
     combined_scores = dict(reranked_results)
