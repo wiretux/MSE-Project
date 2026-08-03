@@ -24,7 +24,7 @@ python crawler.py
 # UI
 Launch the Terminal User Interface (TUI) to search interactively:
 ```
-python ui_example.py
+python ui.py
 ```
 
 # Batch queries
