@@ -11,7 +11,7 @@ def get_idf(doc_count: int, N: int) -> float:
 
 def get_bm25(
     query: str, limit: int = 100, k1: float = 1.5, b: float = 0.75
-) -> list[(UUID, float)]:
+) -> list[tuple[UUID, float]]:
     # Preprocess the text to tokens
     query_tokens = preprocess_text(query)
 

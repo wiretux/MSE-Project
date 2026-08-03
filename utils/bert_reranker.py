@@ -12,7 +12,7 @@ model = AutoModel.from_pretrained("bert-large-uncased")
 model.eval()
 
 
-def __get_mean_polled_embedding(bert_output, attention_mask):
+def __get_mean_polled_embedding(bert_output: torch.BaseModelOutput, attention_mask: torch.Tensor) -> list[float]:
     # Get the token vectors
     token_embedding = bert_output.last_hidden_state
 
@@ -34,7 +34,7 @@ def __get_mean_polled_embedding(bert_output, attention_mask):
     return mean_pooled.squeeze(0).tolist()
 
 
-def get_bert_embedding(text):
+def get_bert_embedding(text: str) -> list[float]:
 
     inputs = tokenizer(text, truncation=True, return_tensors="pt")
 
@@ -44,7 +44,7 @@ def get_bert_embedding(text):
     return __get_mean_polled_embedding(output, inputs["attention_mask"])
 
 
-def bert_reranker(query_text: str, doc_embeddings_dict: dict) -> list[(UUID, float)]:
+def bert_reranker(query_text: str, doc_embeddings_dict: dict[UUID, list[float]]) -> list[tuple[UUID, float]]:
     if not query_text or not doc_embeddings_dict:
         return []
 

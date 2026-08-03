@@ -21,7 +21,7 @@ class Storage:
         self._db = sqlite3.connect("mse.db", timeout=5.0)
         self._cur = self._db.cursor()
 
-    def init(self):
+    def init(self) -> None:
         self._cur.execute("""CREATE TABLE IF NOT EXISTS documents (
             id BLOB PRIMARY KEY,
             url TEXT UNIQUE NOT NULL,
@@ -65,8 +65,8 @@ class Storage:
         self._db.commit()
 
     def offer_frontier(
-        self, link: (str, int) | list[(str, int)], doc_id: str | None = None
-    ):
+        self, link: tuple[str, int] | list[tuple[str, int]], doc_id: str | None = None
+    ) -> None:
         if not isinstance(link, list):
             link = [link]
 
@@ -93,16 +93,17 @@ class Storage:
             )
         self._db.commit()
 
-    def count_frontier(self, depth: int = 0):
+    def count_frontier(self, depth: int = 0) -> int:
         self._cur.execute(
             f"SELECT count(*) FROM documents WHERE status = {DocumentStatus.PENDING} AND depth = ?",
             [depth],
         )
-        return self._cur.fetchone()[0]
+        res = self._cur.fetchone()
+        return res[0] if res else 0
 
     def poll_frontier(
         self, max: int = 100, max_depth: int = 100
-    ) -> list[(UUID, str, int)]:
+    ) -> list[tuple[UUID, str, int]]:
         query = f"""WITH rows AS (
             SELECT id
             FROM documents
@@ -120,7 +121,7 @@ class Storage:
         self._db.commit()
         return [(UUID(bytes=byte_id), url, depth) for byte_id, url, depth in results]
 
-    def get_cache(self, max_depth: int = 0):
+    def get_cache(self, max_depth: int = 0) -> list[tuple[UUID, str, int]]:
         query = f"""SELECT id, url, depth
         FROM documents
         WHERE status = {DocumentStatus.CACHED} AND depth <= ?
@@ -132,7 +133,7 @@ class Storage:
 
     def update_status(
         self, doc_id: UUID, status: DocumentStatus = DocumentStatus.READY
-    ):
+    ) -> None:
         self._cur.execute(
             "UPDATE documents SET status = ? WHERE id = ?", [status, doc_id.bytes]
         )
@@ -140,20 +141,21 @@ class Storage:
 
     def update_document(
         self, doc_id: UUID, title: str | None, desc: str | None, doc_length: int
-    ):
+    ) -> None:
         self._cur.execute(
             "UPDATE documents SET title = ?, description = ?, length = ? WHERE id = ?",
             [title, desc, doc_length, doc_id.bytes],
         )
         self._db.commit()
 
-    def count_index(self):
+    def count_index(self) -> int:
         self._cur.execute(
             f"SELECT count(*) FROM documents WHERE status = {DocumentStatus.READY}"
         )
-        return self._cur.fetchone()[0]
+        res = self._cur.fetchone()
+        return res[0] if res else 0
 
-    def add_embedding(self, doc_id: UUID, doc_embedding: list[float]):
+    def add_embedding(self, doc_id: UUID, doc_embedding: list[float]) -> None:
         embedding_blob = array.array("f", doc_embedding).tobytes()
         self._cur.execute(
             "INSERT INTO embeddings (doc_id, embedding) VALUES (?, ?) ON CONFLICT DO NOTHING",
@@ -161,7 +163,7 @@ class Storage:
         )
         self._db.commit()
 
-    def rank_pages(self, iterations: int = 20, d_factor: float = 0.85):
+    def rank_pages(self, iterations: int = 10, d_factor: float = 0.85) -> None:
         # Reset page rank
         self._cur.execute(f"""UPDATE documents
             SET rank = 1.0 / total
@@ -236,7 +238,7 @@ class Storage:
             for byte_id, embedding_blob in rows
         }
 
-    def add_posting(self, doc_id: UUID, posting: (str, int) | list[(str, int)]):
+    def add_posting(self, doc_id: UUID, posting: tuple[str, int] | list[tuple[str, int]]):
         if not isinstance(posting, list):
             posting = [posting]
 
@@ -263,7 +265,7 @@ class Storage:
 
     def get_postings(
         self, terms: list[str], max: int = 2000
-    ) -> (dict, dict, float, int):
+    ) -> tuple[dict, dict, float, int]:
         query = f"""
         WITH corpus_meta AS (
             SELECT count(*) AS N,
@@ -359,7 +361,7 @@ class Storage:
             for doc_id, url, title, description, length, depth, rank in rows
         }
 
-    def close(self):
+    def close(self) -> None:
         self._cur.close()
         self._db.close()
 

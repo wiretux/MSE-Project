@@ -97,15 +97,15 @@ STEP_4_RULES = sorted(
 )
 
 
-def __is_vowel(word, index=0):
+def __is_vowel(word: str, index: int = 0) -> bool:
     return word[index] in VOWELS
 
 
-def __has_vowel(word):
+def __has_vowel(word: str) -> bool:
     return any(__is_vowel(c) for c in word)
 
 
-def __mark_region(word):
+def __mark_region(word: str) -> tuple[int, int]:
     r1, r2 = len(word), len(word)
 
     for prefix in PREFIX_WORDS:
@@ -126,7 +126,7 @@ def __mark_region(word):
     return r1, r2
 
 
-def __endswith_short_syllabel(word):
+def __endswith_short_syllabel(word: str) -> bool:
     # (a) Non-vowel followed by a vowel followed by a non-vowel other than w, x or Y at end of string
     rule_a = rf"[^{VOWELS}][{VOWELS}][^{VOWELS}wxY]$"
 
@@ -139,11 +139,11 @@ def __endswith_short_syllabel(word):
     return bool(re.search(rf"{rule_a}|{rule_b}|{rule_c}", word))
 
 
-def __is_short(word, r1):
+def __is_short(word: str, r1: int) -> bool:
     return len(word) == r1 and __endswith_short_syllabel(word)
 
 
-def porter2_stemmer(word):
+def porter2_stemmer(word: str) -> str:
     word = word.lower()
     if len(word) <= 2:
         return word

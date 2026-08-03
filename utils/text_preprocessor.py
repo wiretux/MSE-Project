@@ -22,19 +22,16 @@ lemmatizer = WordNetLemmatizer()
 
 
 # Replaces german umlaute in a text
-def convert_german_umlaute(text):
+def convert_german_umlaute(text: str) -> str:
     return text.translate(_german_umlaute_mapping)
 
-
-def tokenize(text):
-    # Splits the text into tokens and lowers it
-    tokens = tokenizer.tokenize(text)
-
-    return tokens
+# Splits the text into tokens and lowers it
+def tokenize(text: str) -> list[str]:
+    return tokenizer.tokenize(text)
 
 
 # Check if a text is mostly english
-def is_mostly_english(text, threshold=0.5):
+def is_mostly_english(text: str, threshold: float=0.5) -> bool:
     tokens = tokenize(text)
 
     # Only keep alphabetic tokens (e.g. remove numbers, etc.)
@@ -49,9 +46,9 @@ def is_mostly_english(text, threshold=0.5):
 
 
 # Pre-process text and split it into tokens
-def preprocess_text(text):
+def preprocess_text(text: str) -> list[str]:
     # Splits the text into tokens and lowers it
-    tokens = tokenizer.tokenize(text)
+    tokens = tokenize(text)
 
     # Remove all punctuation only tokens
     tokens = filter(lambda token: any(char.isalnum() for char in token), tokens)

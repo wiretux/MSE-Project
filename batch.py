@@ -8,7 +8,7 @@ logging.basicConfig(format="%(levelname)s: %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-def read_queries(file_path):
+def read_queries(file_path: Path) -> list[tuple[int, str]]:
     lines = file_path.read_text().splitlines()
     return [
         (int(parts[0]), parts[1])
@@ -20,7 +20,7 @@ def read_queries(file_path):
     ]
 
 
-def batch(results, output_path):
+def batch(results: list[tuple[int, list[tuple[dict, float]]]], output_path: Path) -> None:
     with open(output_path, "w") as f:
         for query_idx, query_results in results:
             for result_idx, (result, score) in enumerate(query_results):
@@ -34,7 +34,7 @@ def batch(results, output_path):
                 )
 
 
-def evaluate(query_file_path, output_file_path):
+def evaluate(query_file_path: Path, output_file_path: Path) -> None:
     # Read in the queries as a list
     queries = read_queries(query_file_path)
 

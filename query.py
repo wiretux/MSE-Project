@@ -9,7 +9,7 @@ from utils.bm25 import get_bm25
 # Sort pages based on BERT and pagerank
 
 
-def retrieve(query: str, limit: int = 100, skew: float = 0.3) -> [(dict, float)]:
+def retrieve(query: str, limit: int = 100, skew: float = 0.3) -> list[tuple[dict, float]]:
     first_results = get_bm25(query, 5 * limit)
 
     if not first_results:

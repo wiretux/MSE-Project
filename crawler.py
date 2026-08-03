@@ -64,7 +64,7 @@ def __download_with_limit(
     cb0: Callable[[int], None] | None = None,
     cb1: Callable[[int], None] | None = None,
     limit: int = MAX_DOCUMENT_SIZE,
-):
+) -> None:
     res = requests.get(
         site_url,
         headers={"User-Agent": USER_AGENT, "Accept-Language": "en"},
@@ -144,7 +144,7 @@ def __parse_robots(site_url: str) -> RobotFileParser:
     return rp
 
 
-def __parse_document(cache_path: str, site_url: str) -> dict | None:
+def __parse_document(cache_path: str, site_url: str) -> dict[str, str | list(str)] | None:
     """
     Extracts text content and links from a given document.
     """
@@ -188,7 +188,7 @@ def __parse_document(cache_path: str, site_url: str) -> dict | None:
         "title": title,
         "desc": desc,
         "content": soup.get_text(separator=" ", strip=True),
-        "links": links,
+        "links": list(links),
     }
 
 
@@ -198,7 +198,7 @@ def __download_worker(
     d_progress: Progress,
     d_task_id: int,
     i_task_id: int,
-):
+) -> None:
     with storage.access() as store:
         while True:
             try:
@@ -254,7 +254,7 @@ def __download_worker(
                 frontier.task_done()
 
 
-def __index_worker(queue: Queue, progress: Progress):
+def __index_worker(queue: Queue, progress: Progress) -> None:
     with storage.access() as store:
         while True:
             try:
@@ -322,7 +322,7 @@ def __index_worker(queue: Queue, progress: Progress):
                 queue.task_done()
 
 
-def crawl():
+def crawl() -> None:
     # Ensure cache dirs are present
     for cache_dir in ["robots", "crawler"]:
         Path(f".cache/{cache_dir}").mkdir(parents=True, exist_ok=True)

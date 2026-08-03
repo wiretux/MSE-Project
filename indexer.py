@@ -12,7 +12,7 @@ def is_relevant(text: str, tokens: list[str]) -> bool:
     )
 
 
-def index(doc_id: UUID, document: dict) -> bool:
+def index(doc_id: UUID, document: dict[str, str | list(str)]) -> bool:
     full_doc_content = document["content"]
     if desc := document["desc"]:
         full_doc_content = f"{desc}. {full_doc_content}"
