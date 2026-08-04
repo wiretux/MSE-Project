@@ -1,6 +1,7 @@
 from textual import work
 from textual.app import App, ComposeResult
 from textual.containers import Vertical
+from textual.events import Key
 from textual.screen import Screen
 from textual.widgets import Input, Label, ListItem, ListView, LoadingIndicator
 
@@ -200,6 +201,11 @@ class ResultScreen(Screen):
         text-style: italic;
     }
 
+    .ai-score {
+        color: $accent;
+        margin-top: 1;
+    }
+
     #title {
         dock: top;
         width: 100%;
@@ -219,7 +225,8 @@ class ResultScreen(Screen):
     def __init__(self, search_term: str):
         super().__init__()
         self.search_term = search_term
-        self.search_list: list[tuple[str, str, str]] = []
+        self.search_list: list[tuple[str, str, str, str]] = []
+        self.search_completed = False
 
     # Start the search in the background once the screen is mounted.
     def on_mount(self) -> None:
@@ -229,6 +236,7 @@ class ResultScreen(Screen):
     @work(thread=True)
     def perform_search(self) -> None:
         results = retrieve(self.search_term)
+        self.search_completed = True
         self.app.call_from_thread(self.update_results, results)
 
     # Shortens a text
@@ -238,6 +246,11 @@ class ResultScreen(Screen):
                 if len(text) > limit
                 else text)
 
+    # Returns the footer text
+    def get_footer_text(self) -> str:
+        ai_status_text = "on" if self.app.show_ai_score else "off"
+        return f"Ctrl+A Show-AI-probably: {ai_status_text} | Press ESC to go back | Press Ctrl+Q to exit"
+
     # Hide the loading spinner and show the results (or a "no results" message).
     def update_results(self, results: list) -> None:
         self.search_list = []
@@ -245,25 +258,31 @@ class ResultScreen(Screen):
             url = doc["url"]
             title = doc.get("title", "Untitled")
             desc = doc.get("description")
+            ai_score = "AI-probably: " + str(int(doc.get("ai_score", 0) * 100)) + "%"
 
             if desc in [None, "", "[No description]"]:
                 desc = "No description provided"
 
 
-            self.search_list.append((url, title, desc))
+            self.search_list.append((url, title, desc, ai_score))
 
         loader = self.query_one("#loader", LoadingIndicator)
         loader.display = False
 
         list_view = self.query_one("#result-list", ListView)
         if self.search_list:
-            for url, title, desc in self.search_list:
+            for url, title, desc, ai_score in self.search_list:
+
+                ai_score_label = Label(self.shorten_text(ai_score, MAX_DESC_LENGTH), classes="ai-score")
+                ai_score_label.display = self.app.show_ai_score
+
                 list_view.append(
                     ListItem(
                         Vertical(
                             Label(self.shorten_text(title, MAX_TITLE_LENGTH), classes="result-title"),
                             Label(self.shorten_text(url, MAX_URL_LENGTH), classes="result-url"),
-                            Label(self.shorten_text(desc, MAX_DESC_LENGTH), classes="result-desc")
+                            Label(self.shorten_text(desc, MAX_DESC_LENGTH), classes="result-desc"),
+                            ai_score_label
                         )
                     )
                 )
@@ -275,7 +294,7 @@ class ResultScreen(Screen):
         yield Label(f"Results for: {self.search_term}", id="title")
         yield LoadingIndicator(id="loader")
         yield ListView(id="result-list")
-        yield Label("Press ESC to go back | Press Ctrl+Q to exit", id="exit-label")
+        yield Label(self.get_footer_text(), id="exit-label")
 
     # Open the URL of the selected result.
     def on_list_view_selected(self, event: ListView.Selected) -> None:
@@ -286,11 +305,26 @@ class ResultScreen(Screen):
     def key_escape(self) -> None:
         self.app.pop_screen()
 
+    # Check if the user pressed a combination
+    def on_key(self, event: Key) -> None:
+        if event.key == "ctrl+a" and self.search_completed:
+            self.app.show_ai_score = not self.app.show_ai_score
+
+            # Update footer text
+            exit_label = self.query_one("#exit-label", Label)
+            exit_label.update(self.get_footer_text())
+
+            # Toggle visibility of ai score labels
+            for ai_label in self.query(".ai-score"):
+                ai_label.display = self.app.show_ai_score
+
+            event.stop()
 
 class SearchEngine(App):
     # Create shared search history and show the home screen on startup.
     def on_mount(self) -> None:
         self.search_history = []
+        self.show_ai_score = False
         self.push_screen(SearchScreen())
 
 
