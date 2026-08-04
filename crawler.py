@@ -14,11 +14,11 @@ from bs4 import BeautifulSoup
 from requests.exceptions import ConnectionError, RequestException, HTTPError
 from rich.progress import Progress
 
-from indexer import index
+from indexer import index, precalc_embeddings
 from utils import storage
 
 USER_AGENT = "MSE-Crawler"  # User Agent used when crawling
-CRAWL_DEPTH = 2  # Maximum distance/depth crawler may deviate from seed urls
+CRAWL_DEPTH = 1  # Maximum distance/depth crawler may deviate from seed urls
 CRAWL_TIMEOUT = 10  # Timeout in seconds
 CRAWLER_COUNT = 12
 CRAWLER_DELAY = 0.1
@@ -27,6 +27,7 @@ MAX_DOCUMENT_SIZE = 2 * 1024 * 1024  # Document limit in bytes (2MiB)
 CLEANUP_ON_INDEX = True
 IGNORE_SSL = False
 MAX_INDEXERS = 12
+PAGE_RANK_N = 10
 
 # In-memory dictionary to store compiled RobotFileParser instances per worker process
 _ROBOTS_RAM_CACHE: dict[str, RobotFileParser] = {}
@@ -434,10 +435,17 @@ def crawl() -> None:
         progress_queue.put(None)
         updater_thread.join()
 
-    with storage.access() as store:
-        store.rank_pages()
-        print("Crawling/Indexing complete")
-        print(f"Sites indexed: {store.count_index()}")
+        index_count = store.count_index()
+        embedding_count = store.count_embeddings()
+
+        if index_count - embedding_count > 0:
+            task_id = progress.add_task("[Embeddings]", total=index_count-embedding_count)
+            precalc_embeddings(progress, task_id)
+        
+        task_id = progress.add_task("[PageRank]", total=PAGE_RANK_N)
+        store.rank_pages(PAGE_RANK_N, progress=progress, task_id=task_id)
+
+    print(f"[Completed] Websites indexed: {index_count}")
 
 if __name__ == "__main__":
     with storage.access() as store:

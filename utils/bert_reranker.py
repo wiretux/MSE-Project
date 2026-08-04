@@ -6,9 +6,14 @@ from transformers import AutoModel, AutoTokenizer, logging
 # Hide debugging info
 logging.set_verbosity_error()
 
+# Use CUDA/ROCm
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(f"[BERT] Using device: {device}")
+
 # Load the bert model
 tokenizer = AutoTokenizer.from_pretrained("bert-large-uncased")
 model = AutoModel.from_pretrained("bert-large-uncased")
+model.to(device)
 model.eval()
 
 
@@ -35,8 +40,7 @@ def __get_mean_polled_embedding(bert_output: torch.BaseModelOutput, attention_ma
 
 
 def get_bert_embedding(text: str) -> list[float]:
-
-    inputs = tokenizer(text, truncation=True, return_tensors="pt")
+    inputs = tokenizer(text, truncation=True, return_tensors="pt").to(device)
 
     with torch.no_grad():
         output = model(**inputs)

@@ -8,6 +8,7 @@ from enum import IntEnum
 from uuid import UUID, uuid7
 
 from nltk.metrics import jaccard_distance
+from rich.progress import Progress
 
 from utils.hash import hamming_distance
 
@@ -198,6 +199,19 @@ class Storage:
         res = self._cur.fetchone()
         return res[0] if res else 0
 
+    def poll_content(self, max: int = 50) -> list[tuple[UUID, str | None, str | None, str]]:
+        query = f"""
+        SELECT d.id, d.title, d.description, content.data
+        FROM documents d
+        JOIN content ON content.id = d.content_id
+        WHERE NOT EXISTS(SELECT 1 FROM embeddings e WHERE d.id = e.doc_id)
+        AND status = {DocumentStatus.READY}
+        LIMIT {max}
+        """
+
+        self._cur.execute(query)
+        return [(UUID(bytes=id), title, desc, data) for id, title, desc, data in self._cur.fetchall()]
+
     def add_embedding(self, doc_id: UUID, doc_embedding: list[float]) -> None:
         embedding_blob = array.array("f", doc_embedding).tobytes()
         self._cur.execute(
@@ -206,7 +220,12 @@ class Storage:
         )
         self._db.commit()
 
-    def rank_pages(self, iterations: int = 10, d_factor: float = 0.85) -> None:
+    def count_embeddings(self):
+        self._cur.execute("SELECT count(*) FROM embeddings")
+        res = self._cur.fetchone()
+        return res[0] if res else 0
+
+    def rank_pages(self, iterations: int = 10, d_factor: float = 0.85, progress: Progress | None = None, task_id: int = None) -> None:
         # Reset page rank
         self._cur.execute(f"""UPDATE documents
             SET rank = 1.0 / total
@@ -253,6 +272,9 @@ class Storage:
                 LEFT JOIN in_docs id ON d.id = id.id
                 WHERE documents.id = d.id AND documents.status = {DocumentStatus.READY}
             """)
+
+            if progress and task_id:
+                progress.advance(task_id, 1)
         self._db.commit()
 
     def get_embedding(self, doc_ids: UUID | list[UUID]) -> dict[UUID, list[float]]:

@@ -4,9 +4,9 @@ from nltk.stem import WordNetLemmatizer
 from nltk.tokenize import TweetTokenizer
 
 # Download/update the requiered files on initialization if needed
-nltk.download("stopwords")
-nltk.download("wordnet")
-nltk.download("words")
+nltk.download("stopwords", quiet=True)
+nltk.download("wordnet", quiet=True)
+nltk.download("words", quiet=True)
 
 _stop_words = set(stopwords.words("english"))
 
