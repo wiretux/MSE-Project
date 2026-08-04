@@ -282,10 +282,17 @@ def __index_worker(queue: Queue, progress: Progress) -> None:
                             urlunsplit(urlsplit(link)._replace(path=""))
                             for link in site["links"]
                         }
-                        robots = {
-                            urlsplit(netloc).netloc: __parse_robots(netloc)
-                            for netloc in netlocs
-                        }
+
+                        with ThreadPoolExecutor(max_workers=CRAWLER_COUNT) as executor:
+                            futures = {
+                                netloc: executor.submit(__parse_robots, netloc)
+                                for netloc in netlocs
+                            }
+
+                            robots = {
+                                urlsplit(netloc).netloc: future.result()
+                                for netloc, future in futures.items()
+                            }
 
                         # Append filtered links to frontier
                         store.offer_frontier(
@@ -396,6 +403,10 @@ def crawl() -> None:
 with storage.access() as store:
     store.init()
     # Add Seed URLS at depth 0
-    store.offer_frontier(("https://uni-tuebingen.de/en", 0))
+    store.offer_frontier([
+            ("https://uni-tuebingen.de/en", 0),
+            ("https://en.wikipedia.org/wiki/T%C3%BCbingen", 0),
+            ("https://en.wikipedia.org/wiki/University_of_T%C3%BCbingen", 0),
+    ])
 
 crawl()

@@ -1,10 +1,17 @@
 import array
+import hashlib
 import json
 import sqlite3
 from collections.abc import Generator
 from contextlib import contextmanager
 from enum import IntEnum
 from uuid import UUID, uuid7
+
+from nltk.metrics import jaccard_distance
+
+from utils.hash import hamming_distance
+
+SIM_DISTANCE = 0.02
 
 
 class DocumentStatus(IntEnum):
@@ -29,9 +36,16 @@ class Storage:
             description TEXT,
             length INTEGER,
             depth INTEGER NOT NULL,
+            content_id BLOB,
             rank REAL NOT NULL DEFAULT 0,
             status INTEGER NOT NULL DEFAULT 0
         ) STRICT, WITHOUT ROWID""")
+
+        self._cur.execute("""CREATE TABLE IF NOT EXISTS content (
+            id BLOB PRIMARY KEY,
+            sim_hash BLOB NOT NULL,
+            data TEXT NOT NULL
+        )""")
 
         self._cur.execute("""CREATE TABLE IF NOT EXISTS links (
             source BLOB REFERENCES doc(id) NOT NULL,
@@ -120,6 +134,34 @@ class Storage:
         results = self._cur.execute(query, [max_depth, max]).fetchall()
         self._db.commit()
         return [(UUID(bytes=byte_id), url, depth) for byte_id, url, depth in results]
+
+    def store_content(self, content: str, sim_hash: bytes) -> tuple[bytes, bool]:
+        self._cur.execute(
+            "SELECT id, data FROM content WHERE HAMMING(sim_hash, ?) < 5 LIMIT 10",
+            [sim_hash],
+        )
+
+        # Check for similarity of content and return stored content
+        # on find
+        most_similar = min(
+            [
+                (id, jaccard_distance(set(content.split()), set(data.split())))
+                for id, data in self._cur.fetchall()
+            ],
+            key=lambda x: x[1],
+            default=None,
+        )
+
+        if most_similar and most_similar[1] < SIM_DISTANCE:
+            return (most_similar[1], False)
+
+        content_id = hashlib.sha256(content.encode("utf-8"))
+        self._cur.execute(
+            "INSERT INTO content (id, sim_hash, data) VALUES (?, ?, ?) ON CONFLICT DO NOTHING",
+            [content_id.digest(), sim_hash, content],
+        )
+        self._db.commit()
+        return (content_id.digest(), True)
 
     def get_cache(self, max_depth: int = 0) -> list[tuple[UUID, str, int]]:
         query = f"""SELECT id, url, depth

@@ -19,17 +19,22 @@ def index(doc_id: UUID, document: dict[str, str | list(str)]) -> bool:
     if title := document["title"]:
         full_doc_content = f"{title}. {full_doc_content}"
 
-    doc_embedding = bert_reranker.get_bert_embedding(full_doc_content)
-
     tokens = preprocess_text(document["content"])
-
     tfs = list(Counter(tokens).items())
 
     if len(tfs) < 1 or not is_relevant(full_doc_content, tokens):
         return False
 
     with storage.access() as store:
-        store.add_posting(doc_id, tfs)
-        store.add_embedding(doc_id, doc_embedding)
-        store.update_document(doc_id, title, desc, len(tokens))
+        content_id, unique = store.store_content(
+            document["content"], sim_hash(tokens).to_bytes(8, "big")
+        )
+
+        if unique:
+            store.add_posting(doc_id, tfs)
+            store.add_embedding(
+                doc_id, bert_reranker.get_bert_embedding(full_doc_content)
+            )
+
+        store.update_document(doc_id, title, desc, content_id, len(tokens))
     return True
