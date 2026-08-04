@@ -164,7 +164,7 @@ def __parse_document(cache_path: str, site_url: str) -> dict[str, str | list[str
     """
     try:
         with open(cache_path, "r", encoding="utf-8") as document:
-            soup = BeautifulSoup(document, "lxml", features="xml")
+            soup = BeautifulSoup(document, "lxml")
 
 
         title = soup.title.extract().string if soup.title else None
@@ -272,7 +272,11 @@ def __index_worker(in_queue: JoinableQueue, progress_queue: MPQueue) -> None:
     with storage.access() as store:
         while True:
             try:
-                doc_id, site_url, depth, task_id, valid = in_queue.get(timeout=120)
+                item = in_queue.get(timeout=120)
+                if item is None:
+                    in_queue.task_done()
+                    break
+                doc_id, site_url, depth, task_id, valid = item
             except Empty:
                 print(
                     "Indexer timed out, either the indexing took too long or there might be an issue.",
@@ -418,7 +422,7 @@ def crawl() -> None:
             # Append cached docs to indexing Queue
             for cached_doc in cached_docs:
                 doc_id, site_url, depth = cached_doc
-                index_queue.put((doc_id, site_url, depth, index_task_id))
+                index_queue.put((doc_id, site_url, depth, index_task_id, True))
 
             index_queue.join()
 
