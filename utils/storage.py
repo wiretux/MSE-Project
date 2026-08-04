@@ -26,6 +26,7 @@ class DocumentStatus(IntEnum):
 class Storage:
     def __init__(self):
         self._db = sqlite3.connect("mse.db", timeout=5.0)
+        self._db.create_function("HAMMING", 2, hamming_distance)
         self._cur = self._db.cursor()
 
     def init(self) -> None:
@@ -182,11 +183,11 @@ class Storage:
         self._db.commit()
 
     def update_document(
-        self, doc_id: UUID, title: str | None, desc: str | None, doc_length: int
+        self, doc_id: UUID, title: str | None, desc: str | None, content_id: bytes | None, doc_length: int
     ) -> None:
         self._cur.execute(
-            "UPDATE documents SET title = ?, description = ?, length = ? WHERE id = ?",
-            [title, desc, doc_length, doc_id.bytes],
+            "UPDATE documents SET title = ?, description = ?, content_id = ?, length = ? WHERE id = ?",
+            [title, desc, content_id, doc_length, doc_id.bytes],
         )
         self._db.commit()
 

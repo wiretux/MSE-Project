@@ -2,6 +2,7 @@ from collections import Counter
 from uuid import UUID
 
 from utils import bert_reranker, storage
+from utils.hash import sim_hash
 from utils.text_preprocessor import is_mostly_english, preprocess_text
 
 

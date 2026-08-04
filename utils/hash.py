@@ -3,7 +3,7 @@ import hashlib
 
 def hamming_distance(a: bytes, b: bytes) -> int:
     a, b = int.from_bytes(a, "big"), int.from_bytes(b, "big")
-    return (a ^ b).bitcount()
+    return bin(a ^ b).count("1")
 
 
 def sim_hash(tokens: list[str]) -> int:
