@@ -25,7 +25,7 @@ class DocumentStatus(IntEnum):
 
 class Storage:
     def __init__(self):
-        self._db = sqlite3.connect("mse.db", timeout=5.0)
+        self._db = sqlite3.connect("mse.db", timeout=30.0)
         self._db.create_function("HAMMING", 2, hamming_distance)
         self._cur = self._db.cursor()
 
@@ -154,7 +154,7 @@ class Storage:
         )
 
         if most_similar and most_similar[1] < SIM_DISTANCE:
-            return (most_similar[1], False)
+            return (most_similar[0], False)
 
         content_id = hashlib.sha256(content.encode("utf-8"))
         self._cur.execute(

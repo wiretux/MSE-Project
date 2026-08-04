@@ -1,5 +1,6 @@
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from multiprocessing import JoinableQueue, Process, Queue as MPQueue
 from pathlib import Path
 from queue import Empty, Queue, ShutDown
 from threading import Thread, current_thread
@@ -10,27 +11,25 @@ from urllib.robotparser import RobotFileParser
 import requests
 import urllib3
 from bs4 import BeautifulSoup
-from requests.exceptions import ConnectionError, RequestException
-from rich.progress import (
-    BarColumn,
-    DownloadColumn,
-    Progress,
-    TextColumn,
-    TimeRemainingColumn,
-)
+from requests.exceptions import ConnectionError, RequestException, HTTPError
+from rich.progress import Progress
 
 from indexer import index
 from utils import storage
 
 USER_AGENT = "MSE-Crawler"  # User Agent used when crawling
-CRAWL_DEPTH = 1  # Maximum distance/depth crawler may deviate from seed urls
-CRAWL_TIMEOUT = 5  # Timeout in seconds
+CRAWL_DEPTH = 2  # Maximum distance/depth crawler may deviate from seed urls
+CRAWL_TIMEOUT = 10  # Timeout in seconds
 CRAWLER_COUNT = 12
-CRAWLER_DELAY = 0.05
+CRAWLER_DELAY = 0.1
 CHUNK_SIZE = 16384  # 16KiB
 MAX_DOCUMENT_SIZE = 2 * 1024 * 1024  # Document limit in bytes (2MiB)
 CLEANUP_ON_INDEX = True
 IGNORE_SSL = False
+MAX_INDEXERS = 12
+
+# In-memory dictionary to store compiled RobotFileParser instances per worker process
+_ROBOTS_RAM_CACHE: dict[str, RobotFileParser] = {}
 
 # Prevent the constant nagging about SSL verification
 if IGNORE_SSL:
@@ -65,6 +64,7 @@ def __download_with_limit(
     cb0: Callable[[int], None] | None = None,
     cb1: Callable[[int], None] | None = None,
     limit: int = MAX_DOCUMENT_SIZE,
+    type: str = "text/html"
 ) -> None:
     res = requests.get(
         site_url,
@@ -74,6 +74,10 @@ def __download_with_limit(
         verify=not IGNORE_SSL,
     )
     res.raise_for_status()
+
+    # Avoid downloading ""
+    if type not in res.headers.get("Content-Type", "").lower():
+        raise TypeError("Content-Type differs from supplied type")
 
     try:
         reported_total = int(res.headers.get("content-length", 0))
@@ -110,14 +114,20 @@ def __parse_robots(site_url: str) -> RobotFileParser:
     Defaults to allow everything, if parsing fails. (Not Found/Invalid Cert)
     """
     url_seg = urlsplit(site_url)
-    robots_path = f".cache/robots/{Path(url_seg.netloc).name}"
+    domain = url_seg.netloc
+
+    # Check in-memory RAM cache first
+    if domain in _ROBOTS_RAM_CACHE:
+        return _ROBOTS_RAM_CACHE[domain]
+
+    robots_path = f".cache/robots/{Path(domain).name}"
     robots_file = Path(robots_path)
     rp = RobotFileParser()
 
     try:
         if not robots_file.is_file():
             __download_with_limit(
-                urlunsplit(url_seg._replace(path="/robots.txt")), robots_path
+                urlunsplit(url_seg._replace(path="/robots.txt")), robots_path, type="text/plain"
             )
 
         with open(robots_path, "r", encoding="utf-8") as f:
@@ -129,6 +139,7 @@ def __parse_robots(site_url: str) -> RobotFileParser:
         ConnectionError,
         DocumentTooLargeError,
         UnicodeDecodeError,
+        TypeError,
     ):
         # Create an empty file to avoid unneeded requests
         if robots_file.is_file():
@@ -142,60 +153,63 @@ def __parse_robots(site_url: str) -> RobotFileParser:
         rp = RobotFileParser()
         rp.parse([])
 
+    # Store compiled parser in RAM cache before returning
+    _ROBOTS_RAM_CACHE[domain] = rp
     return rp
 
 
-def __parse_document(cache_path: str, site_url: str) -> dict[str, str | list(str)] | None:
+def __parse_document(cache_path: str, site_url: str) -> dict[str, str | list[str]] | None:
     """
     Extracts text content and links from a given document.
     """
     try:
         with open(cache_path, "r", encoding="utf-8") as document:
-            soup = BeautifulSoup(document, "html.parser")
-    except (FileNotFoundError, PermissionError, OSError):
+            soup = BeautifulSoup(document, "lxml", features="xml")
+
+
+        title = soup.title.extract().string if soup.title else None
+
+        desc_tag = soup.find("meta", attrs={"name": "description"})
+        desc = desc_tag["content"] if desc_tag and desc_tag.has_attr("content") else None
+
+        # Extract links from document
+        links = {
+            link
+            for element in soup.find_all("a", href=True)
+            if (link := __clean_url(urljoin(site_url, element["href"])))
+            # Maybe limit MAX PATH DEPTH?: if len(link.split('/')) > MAX_PATH_DEPTH + 2
+        }
+
+        # Remove non content elements (e.g. nav, header, footer, aside)
+        # This should be relatively safe, since modern sites
+        # use semantic tags like <main> for their content and
+        # nav elements don't really contribute to the actual
+        # content of a page.
+        for tag in ["nav", "header", "footer", "aside"]:
+            for element in soup.find_all(tag):
+                element.decompose()
+
+        # Replace images with their alt text
+        for element in soup.find_all("img"):
+            alt = element.get("alt")
+            if alt and (" " in alt or alt.isalnum()):
+                element.replace_with(alt)
+            else:
+                element.decompose()
+
+        return {
+            "title": title,
+            "desc": desc,
+            "content": soup.get_text(separator=" ", strip=True),
+            "links": list(links),
+        }
+    except Exception:
         return None
-
-    title = soup.title.extract().string if soup.title else None
-
-    desc_tag = soup.find("meta", attrs={"name": "description"})
-    desc = desc_tag["content"] if desc_tag and desc_tag.has_attr("content") else None
-
-    # Extract links from document
-    links = {
-        link
-        for element in soup.find_all("a", href=True)
-        if (link := __clean_url(urljoin(site_url, element["href"])))
-        # Maybe limit MAX PATH DEPTH?: if len(link.split('/')) > MAX_PATH_DEPTH + 2
-    }
-
-    # Remove non content elements (e.g. nav, header, footer, aside)
-    # This should be relatively safe, since modern sites
-    # use semantic tags like <main> for their content and
-    # nav elements don't really contribute to the actual
-    # content of a page.
-    for tag in ["nav", "header", "footer", "aside"]:
-        for element in soup.find_all(tag):
-            element.decompose()
-
-    # Replace images with their alt text
-    for element in soup.find_all("img"):
-        alt = element.get("alt")
-        if alt and (" " in alt or alt.isalnum()):
-            element.replace_with(alt)
-        else:
-            element.decompose()
-
-    return {
-        "title": title,
-        "desc": desc,
-        "content": soup.get_text(separator=" ", strip=True),
-        "links": list(links),
-    }
 
 
 def __download_worker(
     frontier: Queue,
-    index_queue: Queue,
+    index_queue: JoinableQueue,
     d_progress: Progress,
     d_task_id: int,
     i_task_id: int,
@@ -204,6 +218,7 @@ def __download_worker(
         while True:
             try:
                 doc_id, site_url, depth = frontier.get(timeout=120)
+                valid = None
             except Empty:
                 print(
                     "Worker timed out, either the indexing took too long or there might be an issue.",
@@ -214,27 +229,23 @@ def __download_worker(
                 break
 
             try:
-                with Progress(
-                    DownloadColumn(),
-                    BarColumn(),
-                    TextColumn("[bold blue]{task.description}"),
-                    TimeRemainingColumn(),
-                ) as progress:
-                    task_info = [None]
+                __download_with_limit(site_url, f".cache/crawler/{doc_id}")
+                store.update_status(doc_id, storage.DocumentStatus.CACHED)
+                valid = True
+                sleep(CRAWLER_DELAY)
+            # Skip non-html documents
+            except TypeError:
+                store.update_status(doc_id, storage.DocumentStatus.SKIPPED)
+                valid = False
+            # Skip non-html documents
+            except HTTPError as e:
+                print(
+                    f"[{current_thread().name}] Failed to download document from {site_url}:\n\t{e}"
+                )
 
-                    def cb0(
-                        total: int,
-                        task_info: list = task_info,
-                        site_url: str = site_url,
-                    ):
-                        task_info[0] = progress.add_task(site_url, total=total)
-
-                    def cb1(chunk_size: int, task_info: list = task_info):
-                        progress.advance(task_info[0], chunk_size)
-
-                    __download_with_limit(site_url, f".cache/crawler/{doc_id}", cb0, cb1)
-                    store.update_status(doc_id, storage.DocumentStatus.CACHED)
-                    sleep(CRAWLER_DELAY)
+                if e.response.status_code in [401, 403, 404]:
+                    store.update_status(doc_id, storage.DocumentStatus.SKIPPED)
+                    valid = False
             except (RequestException, ConnectionError, DocumentTooLargeError) as e:
                 print(
                     f"[{current_thread().name}] Failed to download document from {site_url}:\n\t{e}"
@@ -244,22 +255,24 @@ def __download_worker(
                 file = Path(f".cache/crawler/{doc_id}")
                 if file.is_file():
                     file.unlink()
+
+                store.update_status(doc_id, storage.DocumentStatus.ERROR)
             except (FileNotFoundError, PermissionError, OSError) as e:
                 print(
                     f"[{current_thread().name}] Failed to cache document - Exiting...\n\t{e}"
                 )
                 break
             finally:
-                index_queue.put((doc_id, site_url, depth, i_task_id))
+                index_queue.put((doc_id, site_url, depth, i_task_id, valid))
                 d_progress.advance(d_task_id, 1)
                 frontier.task_done()
 
 
-def __index_worker(queue: Queue, progress: Progress) -> None:
+def __index_worker(in_queue: JoinableQueue, progress_queue: MPQueue) -> None:
     with storage.access() as store:
         while True:
             try:
-                doc_id, site_url, depth, task_id = queue.get(timeout=120)
+                doc_id, site_url, depth, task_id, valid = in_queue.get(timeout=120)
             except Empty:
                 print(
                     "Indexer timed out, either the indexing took too long or there might be an issue.",
@@ -270,6 +283,10 @@ def __index_worker(queue: Queue, progress: Progress) -> None:
                 break
 
             try:
+                # If not valid try not to index
+                if not valid:
+                    continue
+
                 site = __parse_document(f".cache/crawler/{doc_id}", site_url)
                 if site:
                     if site["content"] and index(doc_id, site):
@@ -326,8 +343,8 @@ def __index_worker(queue: Queue, progress: Progress) -> None:
                 except (FileNotFoundError, PermissionError, OSError):
                     pass
 
-                progress.advance(task_id, 1)
-                queue.task_done()
+                progress_queue.put(task_id)
+                in_queue.task_done()
 
 
 def crawl() -> None:
@@ -336,15 +353,28 @@ def crawl() -> None:
         Path(f".cache/{cache_dir}").mkdir(parents=True, exist_ok=True)
 
     with storage.access() as store, Progress() as progress:
-        index_queue = Queue(maxsize=1000)
-        indexer = Thread(
-            target=__index_worker,
-            args=(
-                index_queue,
-                progress,
-            ),
-        )
-        indexer.start()
+        index_queue = JoinableQueue(maxsize=1000)
+        progress_queue = MPQueue()
+
+        indexers = []
+        for i in range(MAX_INDEXERS):
+            p = Process(
+                target=__index_worker,
+                args=(index_queue, progress_queue),
+                name=f"Indexer-{i}"
+            )
+            p.start()
+            indexers.append(p)
+
+        def progress_updater():
+            while True:
+                task_id = progress_queue.get()
+                if task_id is None:
+                    break
+                progress.advance(task_id, 1)
+
+        updater_thread = Thread(target=progress_updater, daemon=True)
+        updater_thread.start()
 
         for depth in range(CRAWL_DEPTH + 1):
             total = store.count_frontier(depth)
@@ -392,22 +422,27 @@ def crawl() -> None:
 
             index_queue.join()
 
-    index_queue.shutdown()
-    indexer.join()
+        for _ in range(MAX_INDEXERS):
+            index_queue.put(None)
+        for p in indexers:
+            p.join()
+
+        progress_queue.put(None)
+        updater_thread.join()
 
     with storage.access() as store:
         store.rank_pages()
         print("Crawling/Indexing complete")
         print(f"Sites indexed: {store.count_index()}")
 
+if __name__ == "__main__":
+    with storage.access() as store:
+        store.init()
+        # Add Seed URLS at depth 0
+        store.offer_frontier([
+                ("https://uni-tuebingen.de/en", 0)
+                #("https://en.wikipedia.org/wiki/T%C3%BCbingen", 0),
+                #("https://en.wikipedia.org/wiki/University_of_T%C3%BCbingen", 0),
+        ])
 
-with storage.access() as store:
-    store.init()
-    # Add Seed URLS at depth 0
-    store.offer_frontier([
-            ("https://uni-tuebingen.de/en", 0),
-            ("https://en.wikipedia.org/wiki/T%C3%BCbingen", 0),
-            ("https://en.wikipedia.org/wiki/University_of_T%C3%BCbingen", 0),
-    ])
-
-crawl()
+    crawl()

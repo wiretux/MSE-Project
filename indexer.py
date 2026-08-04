@@ -1,17 +1,13 @@
 from collections import Counter
 from uuid import UUID
 
-from utils import bert_reranker, storage
+from utils import storage
 from utils.hash import sim_hash
 from utils.text_preprocessor import is_mostly_english, preprocess_text
 
 
-def is_relevant(text: str, tokens: list[str]) -> bool:
-    return is_mostly_english(text) and (
-        "tuebingen" in tokens
-        or {"university", "eberhard", "karls"}.issubset(set(tokens))
-    )
-
+def is_relevant(text: str) -> bool:
+    return is_mostly_english(text) and "tuebingen" in text
 
 def index(doc_id: UUID, document: dict[str, str | list(str)]) -> bool:
     full_doc_content = document["content"]
@@ -23,7 +19,7 @@ def index(doc_id: UUID, document: dict[str, str | list(str)]) -> bool:
     tokens = preprocess_text(document["content"])
     tfs = list(Counter(tokens).items())
 
-    if len(tfs) < 1 or not is_relevant(full_doc_content, tokens):
+    if len(tfs) < 1 and not is_relevant(document["content"]):
         return False
 
     with storage.access() as store:
@@ -33,9 +29,6 @@ def index(doc_id: UUID, document: dict[str, str | list(str)]) -> bool:
 
         if unique:
             store.add_posting(doc_id, tfs)
-            store.add_embedding(
-                doc_id, bert_reranker.get_bert_embedding(full_doc_content)
-            )
 
         store.update_document(doc_id, title, desc, content_id, len(tokens))
-    return True
+    return unique
