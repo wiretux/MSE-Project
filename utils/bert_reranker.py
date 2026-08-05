@@ -13,8 +13,10 @@ device = torch.device(device_str)
 print(f"[BERT] Using device: {device}")
 
 # Load the bert model
-tokenizer = AutoTokenizer.from_pretrained("bert-large-uncased")
-model = AutoModel.from_pretrained("bert-large-uncased")
+MODEL_LOC = "./bert-dual-encoder-ms_marco-mse-search"
+#MODEL_LOC = "bert-base-uncased"
+tokenizer = AutoTokenizer.from_pretrained(MODEL_LOC)
+model = AutoModel.from_pretrained(MODEL_LOC)
 model.to(device)
 model.eval()
 
