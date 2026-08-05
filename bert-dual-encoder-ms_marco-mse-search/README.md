@@ -398,13 +398,12 @@ You can finetune this model on your own dataset.
 }
 ```
 
-<!--
+
 ## Glossary
 
 This was specifically trained for a project in the MSE course at the university of Tübingen.
--->
 
-<!--
+
 ## Model Card Authors
 Nico Henzler, Lukas Henzler, Samuel Scheer
--->
+
