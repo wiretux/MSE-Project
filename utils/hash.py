@@ -1,6 +1,7 @@
 import hashlib
 
 
+# Calculate hamming distance
 def hamming_distance(a: bytes, b: bytes) -> int:
     a, b = int.from_bytes(a, "big"), int.from_bytes(b, "big")
     return bin(a ^ b).count("1")

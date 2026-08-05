@@ -31,6 +31,9 @@ class Storage:
         self._cur = self._db.cursor()
 
     def init(self) -> None:
+        """
+        Initialize the databases and reset wrong state
+        """
         self._cur.execute("""CREATE TABLE IF NOT EXISTS documents (
             id BLOB PRIMARY KEY,
             url TEXT UNIQUE NOT NULL,
@@ -84,6 +87,9 @@ class Storage:
     def offer_frontier(
         self, link: tuple[str, int] | list[tuple[str, int]], doc_id: str | None = None
     ) -> None:
+        """
+        Add links to the frontier
+        """
         if not isinstance(link, list):
             link = [link]
 
@@ -111,6 +117,9 @@ class Storage:
         self._db.commit()
 
     def count_frontier(self, depth: int = 0) -> int:
+        """
+        Count the number of links left in frontier
+        """
         self._cur.execute(
             f"SELECT count(*) FROM documents WHERE status = {DocumentStatus.PENDING} AND depth = ?",
             [depth],
@@ -121,6 +130,9 @@ class Storage:
     def poll_frontier(
         self, max: int = 100, max_depth: int = 100
     ) -> list[tuple[UUID, str, int]]:
+        """
+        Extract links from frontier limited to {max}
+        """
         query = f"""WITH rows AS (
             SELECT id
             FROM documents
@@ -139,6 +151,11 @@ class Storage:
         return [(UUID(bytes=byte_id), url, depth) for byte_id, url, depth in results]
 
     def store_content(self, content: str, sim_hash: bytes) -> tuple[bytes, bool]:
+        """
+        Try to store the content in the database, if it does not yet exist.
+        Retrun (prev_content_id, False) if the content is already stored
+        Otherwise (content_id, True)
+        """
         self._cur.execute(
             "SELECT id, data FROM content WHERE HAMMING(sim_hash, ?) < 5 LIMIT 10",
             [sim_hash],
@@ -167,6 +184,9 @@ class Storage:
         return (content_id.digest(), True)
 
     def get_cache(self, max_depth: int = 0) -> list[tuple[UUID, str, int]]:
+        """
+        Extract cached documents from database for indexing
+        """
         query = f"""SELECT id, url, depth
         FROM documents
         WHERE status = {DocumentStatus.CACHED} AND depth <= ?
@@ -179,6 +199,9 @@ class Storage:
     def update_status(
         self, doc_id: UUID, status: DocumentStatus = DocumentStatus.READY
     ) -> None:
+        """
+        Update the status of a document in the corpus
+        """
         self._cur.execute(
             "UPDATE documents SET status = ? WHERE id = ?", [status, doc_id.bytes]
         )
@@ -187,6 +210,9 @@ class Storage:
     def update_document(
         self, doc_id: UUID, title: str | None, desc: str | None, content_id: bytes | None, doc_length: int
     ) -> None:
+        """
+        Update the metadata of a document in the corpus
+        """
         self._cur.execute(
             "UPDATE documents SET title = ?, description = ?, content_id = ?, length = ? WHERE id = ?",
             [title, desc, content_id, doc_length, doc_id.bytes],
@@ -194,13 +220,19 @@ class Storage:
         self._db.commit()
 
     def count_index(self) -> int:
+        """
+        Count number of sucessfully indexed docuemnts
+        """
         self._cur.execute(
             f"SELECT count(*) FROM documents WHERE status = {DocumentStatus.READY}"
         )
         res = self._cur.fetchone()
         return res[0] if res else 0
 
-    def poll_content_for(self, id: UUID | list[UUID]) -> list[tuple[bytes, str]]:
+    def poll_content_for(self, id: UUID | list[UUID]) -> list[tuple[bytes, str | None, str | None, str]]:
+        """
+        Try to extract content from database for ondemand embedding generation
+        """
         if not isinstance(id, list):
             id = [id]
 
@@ -217,19 +249,31 @@ class Storage:
         return [(UUID(bytes=id), title, description, data) for id, title, description, data in self._cur.fetchall()]
 
     def poll_content_ai(self, max: int = 50) -> list[tuple[bytes, str]]:
+        """
+        Extract content from databases that has not yet been scored for AI limited to {max}.
+        """
         self._cur.execute(f"SELECT id, data FROM content WHERE ai_score is NULL LIMIT {max}")
         return [(id, data) for id, data in self._cur.fetchall()]
 
     def add_ai_score(self, content_id: bytes, score: float = 0.0) -> None:
+        """
+        Add ai_score label to content in database.
+        """
         self._cur.execute("UPDATE content SET ai_score = ? WHERE id = ?", [score, content_id])
         self._db.commit()
 
     def count_missing_ai_score(self):
+        """
+        Count number of missing ai_score labels in database.
+        """
         self._cur.execute("SELECT count(*) FROM content WHERE ai_score IS NULL")
         res = self._cur.fetchone()
         return res[0] if res else 0
 
     def poll_content(self, max: int = 50) -> list[tuple[UUID, str | None, str | None, str]]:
+        """
+        Extract content from databases that is missing embeddings.
+        """
         query = f"""
         SELECT d.id, d.title, d.description, content.data
         FROM documents d
@@ -243,6 +287,9 @@ class Storage:
         return [(UUID(bytes=id), title, desc, data) for id, title, desc, data in self._cur.fetchall()]
 
     def add_embedding(self, doc_id: UUID, doc_embedding: list[float]) -> None:
+        """
+        Add embedding to database.
+        """
         embedding_blob = array.array("f", doc_embedding).tobytes()
         self._cur.execute(
             "INSERT INTO embeddings (doc_id, embedding) VALUES (?, ?) ON CONFLICT DO NOTHING",
@@ -251,11 +298,17 @@ class Storage:
         self._db.commit()
 
     def count_embeddings(self):
+        """
+        Count number of embeddings exisitng in database
+        """
         self._cur.execute("SELECT count(*) FROM embeddings")
         res = self._cur.fetchone()
         return res[0] if res else 0
 
     def rank_pages(self, iterations: int = 10, d_factor: float = 0.85, progress: Progress | None = None, task_id: int = None) -> None:
+        """
+        Calculate the page_rank inside the databases.
+        """
         # Reset page rank
         self._cur.execute(f"""UPDATE documents
             SET rank = 1.0 / total
@@ -308,6 +361,9 @@ class Storage:
         self._db.commit()
 
     def get_embedding(self, doc_ids: UUID | list[UUID]) -> dict[UUID, list[float]]:
+        """
+        Extract the embeddings for documents from database.
+        """
         if not doc_ids:
             return {}
 
@@ -334,6 +390,9 @@ class Storage:
         }
 
     def add_posting(self, doc_id: UUID, posting: tuple[str, int] | list[tuple[str, int]]):
+        """
+        Add postings to the database for a given document.
+        """
         if not isinstance(posting, list):
             posting = [posting]
 
@@ -361,6 +420,9 @@ class Storage:
     def get_postings(
         self, terms: list[str], max: int = 2000
     ) -> tuple[dict, dict, float, int]:
+        """
+        Extract postings for a given set of terms.
+        """
         query = f"""
         WITH corpus_meta AS (
             SELECT count(*) AS N,
@@ -418,6 +480,9 @@ class Storage:
         return postings, term_meta, avg_length, total
 
     def get_documents(self, doc_ids: UUID | list[UUID]) -> dict[UUID, dict]:
+        """
+        Extract documents and their metadata from database for ui presentation/batch processing.
+        """
         if not doc_ids:
             return {}
 
@@ -464,6 +529,9 @@ class Storage:
 
 @contextmanager
 def access() -> Generator[Storage, None, None]:
+    """
+    Open a connection to databases and close it later.
+    """
     storage = Storage()
 
     try:

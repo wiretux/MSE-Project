@@ -1,5 +1,7 @@
 import re
 
+# THIS IS NO LONGER IN USE, BUT REMAINS HERE FOR DEMONSTRATION PURPOSES
+
 VOWELS = set("aeiouy")
 DOUBLE = ("bb", "dd", "ff", "gg", "mm", "nn", "pp", "rr", "tt")
 LI_ENDING = set("cdeghkmnrt")
@@ -143,7 +145,11 @@ def __is_short(word: str, r1: int) -> bool:
     return len(word) == r1 and __endswith_short_syllabel(word)
 
 
-def porter2_stemmer(word: str) -> str:
+def stem_word(word: str) -> str:
+    """
+    Calculate snowball/porter2 word stems
+    using the defined rules
+    """
     word = word.lower()
     if len(word) <= 2:
         return word

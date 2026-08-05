@@ -1,3 +1,4 @@
+import argparse
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from multiprocessing import JoinableQueue, Process, Queue as MPQueue
@@ -14,21 +15,41 @@ from bs4 import BeautifulSoup
 from requests.exceptions import ConnectionError, RequestException, HTTPError
 from rich.progress import Progress
 
-from indexer import index, precalc_embeddings, precalc_ai_score
+from utils.indexer import index, precalc_embeddings, precalc_ai_score
 from utils import storage
 
+
+# Parse cli arguments
+parser = argparse.ArgumentParser(description="Crawler application to index pages found on the interwebs")
+parser.add_argument("--skip-crawling", action="store_true", help="Skip generating embeddings offline")
+parser.add_argument("--skip-embedding", action="store_true", help="Skip generating embeddings offline")
+parser.add_argument("--skip-ai-detection", action="store_true", help="Skip generating ai_score offline")
+parser.add_argument("--ignore-ssl", action="store_true", help="Ignore SSL certificates (includes malformed SSL certificates)")
+parser.add_argument("-c", "--crawlers", type=int, default=12, help="Number of crawlers to be used")
+parser.add_argument("-i", "--indexers", type=int, default=12, help="Number of indexers to be used")
+parser.add_argument("-w", "--wait", type=int, default=100, help="Number milliseconds to wait after crawling")
+parser.add_argument("-t", "--timeout", type=int, default=20, help="Number seconds before skipping page")
+parser.add_argument("-d", "--depth", type=int, default=1, help="Maximum deviation from seed urls")
+parser.add_argument("-a", "--attempts", type=int, default=2, help="Number of attempts made to crawl page")
+args = parser.parse_args()
+
+# Configurable settings (For description see parser)
+CRAWL_DEPTH   = args.depth
+CRAWL_TIMEOUT = args.timeout
+CRAWL_ATTEMPTS = args.attempts
+CRAWLER_COUNT = args.crawlers
+CRAWLER_DELAY = args.wait * 0.001
+IGNORE_SSL    = args.ignore_ssl
+MAX_INDEXERS  = args.indexers
+
+
 USER_AGENT = "MSE-Crawler"  # User Agent used when crawling
-CRAWL_DEPTH = 1  # Maximum distance/depth crawler may deviate from seed urls
-CRAWL_TIMEOUT = 20  # Timeout in seconds
-CRAWL_ATTEMPTS = 2
-CRAWLER_COUNT = 12
-CRAWLER_DELAY = 0.1
-CHUNK_SIZE = 16384  # 16KiB
+CHUNK_SIZE = 16384          # Download 16KiB at a time
 MAX_DOCUMENT_SIZE = 2 * 1024 * 1024  # Document limit in bytes (2MiB)
-CLEANUP_ON_INDEX = True
-IGNORE_SSL = False
-MAX_INDEXERS = 12
-PAGE_RANK_N = 10
+CLEANUP_ON_INDEX = True     # Should indexed files be deleted from cache
+PAGE_RANK_N = 10            # Number of iterations used to calculate page rank
+
+
 
 # In-memory dictionary to store compiled RobotFileParser instances per worker process
 _ROBOTS_RAM_CACHE: dict[str, RobotFileParser] = {}
@@ -63,11 +84,14 @@ def __clean_url(url: str) -> str | None:
 def __download_with_limit(
     site_url: str,
     file_path: str,
-    cb0: Callable[[int], None] | None = None,
-    cb1: Callable[[int], None] | None = None,
     limit: int = MAX_DOCUMENT_SIZE,
     type: str = "text/html"
 ) -> None:
+    """
+    Tries to download an file using requests, while handling timeout + 429 Retry
+    """
+
+    # Attempt to start download n times
     for _ in range(CRAWL_ATTEMPTS):
         res = requests.get(
             site_url,
@@ -77,6 +101,7 @@ def __download_with_limit(
             verify=not IGNORE_SSL,
         )
 
+        # If status 429 try to wait at max 30 seconds and retry
         if res.status_code == 429:
             try:
                 retry_after = int(res.headers.get("Retry-After", 30))
@@ -87,7 +112,7 @@ def __download_with_limit(
                 pass
     res.raise_for_status()
 
-    # Avoid downloading ""
+    # Avoid downloading pages with wrong content
     if type not in res.headers.get("Content-Type", "").lower():
         raise TypeError("Content-Type differs from supplied type")
 
@@ -97,22 +122,19 @@ def __download_with_limit(
     except (ValueError, TypeError):
         reported_total = 0
 
+    # If document is too large, then abort
     if reported_total > MAX_DOCUMENT_SIZE:
         raise DocumentTooLargeError(
             f"Document at {site_url} exceeds the limit of {MAX_DOCUMENT_SIZE} bytes."
         )
 
-    if cb0:
-        cb0(reported_total)
 
+    # Download file and save to disk
     total_bytes = 0
     with open(file_path, "wb") as f:
         for chunk in res.iter_content(chunk_size=CHUNK_SIZE):
             if chunk:
                 total_bytes += len(chunk)
-                if cb1:
-                    cb1(len(chunk))
-
                 if total_bytes >= MAX_DOCUMENT_SIZE:
                     raise DocumentTooLargeError(
                         f"Document at {site_url} exceeds the limit of {MAX_DOCUMENT_SIZE} bytes."
@@ -279,6 +301,7 @@ def __download_worker(
                 )
                 break
             finally:
+                # Submit file to index queue
                 index_queue.put((doc_id, site_url, depth, i_task_id, valid))
                 d_progress.advance(d_task_id, 1)
                 frontier.task_done()
@@ -307,8 +330,10 @@ def __index_worker(in_queue: JoinableQueue, progress_queue: MPQueue) -> None:
                 if not valid:
                     continue
 
+                # Try to parse documents
                 site = __parse_document(f".cache/crawler/{doc_id}", site_url)
                 if site:
+                    # If successfully indexed set to READY else SKIPPED
                     if site["content"] and index(doc_id, site):
                         store.update_status(doc_id, storage.DocumentStatus.READY)
                     else:
@@ -325,6 +350,7 @@ def __index_worker(in_queue: JoinableQueue, progress_queue: MPQueue) -> None:
                             for link in site["links"]
                         }
 
+                        # Try to get relevant robots parsers
                         with ThreadPoolExecutor(max_workers=CRAWLER_COUNT) as executor:
                             futures = {
                                 netloc: executor.submit(__parse_robots, netloc)
@@ -360,6 +386,8 @@ def __index_worker(in_queue: JoinableQueue, progress_queue: MPQueue) -> None:
             ):
                 store.update_status(doc_id, storage.DocumentStatus.ERROR)
             finally:
+
+                # Cleanup cached document
                 try:
                     file_path = Path(f".cache/crawler/{doc_id}")
                     if CLEANUP_ON_INDEX and file_path.is_file():
@@ -377,94 +405,106 @@ def crawl() -> None:
         Path(f".cache/{cache_dir}").mkdir(parents=True, exist_ok=True)
 
     with storage.access() as store, Progress() as progress:
-        index_queue = JoinableQueue(maxsize=1000)
-        progress_queue = MPQueue()
+        if not args.skip_crawling:
+            # Setup processes and threads
+            index_queue = JoinableQueue(maxsize=1000)
+            progress_queue = MPQueue()
 
-        indexers = []
-        for i in range(MAX_INDEXERS):
-            p = Process(
-                target=__index_worker,
-                args=(index_queue, progress_queue),
-                name=f"Indexer-{i}"
-            )
-            p.start()
-            indexers.append(p)
+            indexers = []
+            for i in range(MAX_INDEXERS):
+                p = Process(
+                    target=__index_worker,
+                    args=(index_queue, progress_queue),
+                    name=f"Indexer-{i}"
+                )
+                p.start()
+                indexers.append(p)
 
-        def progress_updater():
-            while True:
-                task_id = progress_queue.get()
-                if task_id is None:
-                    break
-                progress.advance(task_id, 1)
+            def progress_updater():
+                while True:
+                    task_id = progress_queue.get()
+                    if task_id is None:
+                        break
+                    progress.advance(task_id, 1)
 
-        updater_thread = Thread(target=progress_updater, daemon=True)
-        updater_thread.start()
+            updater_thread = Thread(target=progress_updater, daemon=True)
+            updater_thread.start()
 
-        for depth in range(CRAWL_DEPTH + 1):
-            total = store.count_frontier(depth)
-            cached_docs = store.get_cache(depth)
+            # Iterate over depth for progress bar
+            for depth in range(CRAWL_DEPTH + 1):
+                total = store.count_frontier(depth)
+                cached_docs = store.get_cache(depth)
 
-            task_id = progress.add_task(f"[Download] {depth} - Depth", total=total)
-            index_task_id = progress.add_task(
-                f"[Index] {depth} - Depth", total=total + len(cached_docs)
-            )
-            if total > 0:
-                frontier_queue = Queue(maxsize=CRAWLER_COUNT * 2)
-                crawlers = []
+                task_id = progress.add_task(f"[Download] {depth} - Depth", total=total)
+                index_task_id = progress.add_task(
+                    f"[Index] {depth} - Depth", total=total + len(cached_docs)
+                )
 
-                for i in range(CRAWLER_COUNT):
-                    t = Thread(
-                        target=__download_worker,
-                        args=(
-                            frontier_queue,
-                            index_queue,
-                            progress,
-                            task_id,
-                            index_task_id,
-                        ),
-                        name=f"Crawler-{i}",
-                    )
-                    crawlers.append(t)
-                    t.start()
+                # If there is at least one missing document try to download
+                if total > 0:
+                    frontier_queue = Queue(maxsize=CRAWLER_COUNT * 2)
+                    crawlers = []
 
-                while frontier := store.poll_frontier(50, depth):
-                    for task in frontier:
-                        frontier_queue.put(task)
+                    # Start crawlers
+                    for i in range(CRAWLER_COUNT):
+                        t = Thread(
+                            target=__download_worker,
+                            args=(
+                                frontier_queue,
+                                index_queue,
+                                progress,
+                                task_id,
+                                index_task_id,
+                            ),
+                            name=f"Crawler-{i}",
+                        )
+                        crawlers.append(t)
+                        t.start()
 
-                # Make sure we don't overlap depth, so we can
-                # get the total amount of sites to crawl for
-                # any given depth
-                frontier_queue.join()
-                frontier_queue.shutdown()
-                for c in crawlers:
-                    c.join()
+                    # Iterate over missing pages
+                    while frontier := store.poll_frontier(50, depth):
+                        for task in frontier:
+                            frontier_queue.put(task)
 
-            # Append cached docs to indexing Queue
-            for cached_doc in cached_docs:
-                doc_id, site_url, depth = cached_doc
-                index_queue.put((doc_id, site_url, depth, index_task_id, True))
+                    # Make sure we don't overlap depth, so we can
+                    # get the total amount of sites to crawl for
+                    # any given depth
+                    frontier_queue.join()
+                    frontier_queue.shutdown()
+                    for c in crawlers:
+                        c.join()
 
-            index_queue.join()
+                # Append cached docs to indexing Queue
+                for cached_doc in cached_docs:
+                    doc_id, site_url, depth = cached_doc
+                    index_queue.put((doc_id, site_url, depth, index_task_id, True))
 
-        for _ in range(MAX_INDEXERS):
-            index_queue.put(None)
-        for p in indexers:
-            p.join()
+                # Make sure we have processed all docs before proceeding
+                index_queue.join()
 
-        progress_queue.put(None)
-        updater_thread.join()
+            # Cleanup indexing workers
+            for _ in range(MAX_INDEXERS):
+                index_queue.put(None)
+            for p in indexers:
+                p.join()
 
+            progress_queue.put(None)
+            updater_thread.join()
+
+        # Calculate page rank
         task_id = progress.add_task("[PageRank]", total=PAGE_RANK_N)
         store.rank_pages(PAGE_RANK_N, progress=progress, task_id=task_id)
 
+        # Calculate embeddings offline
         index_count = store.count_index()
         embedding_count = store.count_embeddings()
-        if index_count - embedding_count > 0:
+        if index_count - embedding_count > 0 and not args.skip_embedding:
             task_id = progress.add_task("[Embeddings]", total=index_count-embedding_count)
             precalc_embeddings(progress, task_id)
 
+        # Calculate ai_score offline
         missing_ai_score_count = store.count_missing_ai_score()
-        if missing_ai_score_count > 0:
+        if missing_ai_score_count > 0 and not args.skip_ai_detection:
             task_id = progress.add_task("[AI-Detection]", total=missing_ai_score_count)
             precalc_ai_score(progress, task_id)
 

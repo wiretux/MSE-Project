@@ -8,6 +8,11 @@ from uuid import UUID
 
 
 def ondemand_embedding_gen(missing_embeddings: set[UUID], embeddings: dict[UUID, list[float]]):
+    """
+    Calculate the missing embeddings ondemand.
+    This can be super expensive and should be used with caution.
+    Think about calculating the embeddings offline.
+    """
     from rich.progress import Progress
 
     with storage.access() as store, Progress() as progress:
@@ -23,15 +28,18 @@ def ondemand_embedding_gen(missing_embeddings: set[UUID], embeddings: dict[UUID,
             embeddings[id] = embedding
             progress.advance(task_id, 1)
 
-# Start off with 2 * limit
-# Rerank pages with BERT to limit
-# Sort pages based on BERT and pagerank
 def retrieve(query: str, limit: int = 100, skew: float = 0.3) -> list[tuple[dict, float]]:
-    first_results = get_bm25(query, 2 * limit)
+    """
+    Do the actual retrieval of documents using BM25, BERT and PageRank.
+    """
+
+    # Calculate BM25 with limit of 5 * {limit}
+    first_results = get_bm25(query, 5 * limit)
 
     if not first_results:
         return []
 
+    # Rerank pages with bert and limit to {limit}
     with storage.access() as store:
         embeddings = store.get_embedding([doc_id for doc_id, _ in first_results])
 
@@ -45,8 +53,8 @@ def retrieve(query: str, limit: int = 100, skew: float = 0.3) -> list[tuple[dict
     if not result_docs:
         return []
 
+    # Calculate score as combination of PageRank and BERT
     combined_scores = dict(reranked_results)
-
     pr_norm = 1 / math.log(
         max(result_docs.values(), key=lambda x: x["rank"])["rank"] + 1
     )

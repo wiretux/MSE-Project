@@ -9,12 +9,20 @@ from rich.progress import Progress
 
 
 def is_relevant(text: str, tokens: list[str]) -> bool:
+    """
+    Check if a document is relevant by calculating ratio of english content
+    and if it contain words related to tübingen.
+    """
     return is_mostly_english(text) and (
         "tuebingen" in tokens
         or {"university", "eberhard", "karls"}.issubset(set(tokens))
     )
 
 def index(doc_id: UUID, document: dict[str, str | list(str)]) -> bool:
+    """
+    Index an document in the database.
+    First extract tokens and only store the document if it is relevant and unique.
+    """
     full_doc_content = document["content"]
     if desc := document["desc"]:
         full_doc_content = f"{desc}. {full_doc_content}"

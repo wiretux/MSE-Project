@@ -2,7 +2,7 @@ import argparse
 import logging
 from pathlib import Path
 
-from query import retrieve
+from utils.query import retrieve
 
 logging.basicConfig(format="%(levelname)s: %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)

@@ -5,7 +5,7 @@ from textual.events import Key
 from textual.screen import Screen
 from textual.widgets import Input, Label, ListItem, ListView, LoadingIndicator
 
-from query import retrieve
+from utils.query import retrieve
 
 
 MAX_TITLE_LENGTH = 100

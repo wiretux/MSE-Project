@@ -6,6 +6,7 @@ from utils.text_preprocessor import preprocess_text
 
 
 def get_idf(doc_count: int, N: int) -> float:
+    # Calculate IDF using smoothed formula
     return math.log((N - doc_count + 0.5) / (doc_count + 0.5) + 1)
 
 
