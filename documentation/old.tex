@@ -1,0 +1,50 @@
+\section{Introduction}
+In this report we describe the design and implementation of our search engine TUE Search. It allows to crawl, index and retrive english websites with content related to Tübingen.
+As the programming language we used mostly Python with a litle bit of SQL Code. After the caching and some required predownloads it works entirely offline.
+By combining the classic ranking with neuronal ranking and page rank we combine the advantages of keyword-based and context-based ranking with the important of a website to get great results.
+
+\section{System Overview}
+
+Our implementation is basicly split in main components and utilities (utils). The main components consist of the main task namely the crawler, the indexer, the batcher, the querry and ui. They are with the exception of the query asnd indexer all independently usable and do not relay on each other. Meanwhile the comonly used files like bm25, storage and text preprocessing got split into the utils sub folder.
+The backbone of our implementation is the database sqlite. We opted to use a database here instead of using a file simple file to minimize the storage requirements and drastically improve retrieval efficiency.
+For decoulpuation we decided to implement all the code in the class Storage. This allows us to abstract this layer completly and allowing it to be swaped out for example with a different data base or data structure.
+Our pipeline consist of two main phases: Crawling-Indexing and Retrival. The Crawling-Indexing phase needs to be completed before the retrival can begin because it generates us the mse.db database that contains the meta data about the indexed websites.
+With this database the retrival can be done either via a ui or batcher that allows to process multiple querries in a text at once. For the retrieval we use a combination of BM25 for simple keyword-based ranking, bert (Bidirectional Transformers for Language Understanding) for context ranking and finally page rank to also rank how important a website is. For this rankers we tried to calculate as much as possible in the indexer. While this makes the indexing take longer (especially because of bert) at the ende the benefits for indexing are just outweight this disadvantange. We can archive results in a few seconds and because of the database structure we don't need too much storage space.
+
+% Should we do this? Or should we explain it as part of the other? Cause if we do it like this we fill almost 1/2 site with just titles
+\section{Utilities}
+The untilities are basic independent parts that are requiered by the main application. So before we take a look at the main phases we need to look at the basic utilities first.
+\subsection{ai detection}
+- Explain what it is
+\subsection{bert reranker}
+- Explain what it is
+\subsection{bm25}
+- Explain what it is
+\subsection{storage}
+- Explain what it is
+\subsection{text preprocessor}
+- Explain what it is
+
+\section{Web Crawling and Indexing}
+The first phase is the crawling and indexing phase. 
+- Over all how does Crawling and indexing work
+\subsection{Crawler}
+- Explain short what libaries are used
+- Explain the paralelisierung
+- The bottleneck
+\subsection{Indexer}
+- Explain the bm25 preprocessing
+
+\section{Query Processing and Retrieval}
+- $0.7 \times \text{BERT} + 0.3 \times \text{PageRank}$
+
+\section{Search Result Presentation}
+We have two kinds of Interfaces for searching.
+\subsection{Batch querrys}
+The Batch querrys allows for searching via a inputfile and is more for benchmarking. The files need to be formated like: index<tab>url line by line. If a line is not well formated the user gets notified via a warning that the line got skiped. The user can start it with python batch.py [-o path/to/the/output-file] path/to/the/query-file. While the input path is required we opted to make the output path optional and default to output\_results.txt. In the case that the file already exist the user can decide if they want to overwrite it or if they want to cancel. After the generation is done the file is in the requirements specified format.
+\subsection{User Interface}
+The User Interface is designed around the libary textual. This gives it a unique tui look while at the same time still only requireing a keyboard. This is especially useful for people who try to use the searchengine in a non graphical environment. When you open the app the you can see the search page. Here you see your previous searches and big search field in that you are focuesed by default. If you enter at least one search terms and press enter you can start the search. To increase the patience of the user we show a loading indecater while we fetch on another thread in the background the search results with the retrive function. When the results are final there they are getting shown as the user in form of a list with title, url and if available a small description. The user can navigate with the arrowkeys or optionally the mouse through the entries and when they select any by enter or mouse click it opens in the default webbrowser.
+A highlight and unique feature of the ui is the ai propability score. Because it extends the size of the entries in the list and it is a bonus feature it is hidden by default. But if the user presses strg+a they can toggle this field. Sadly the accurace is relative low. This is also partialy because the model we used was probably trained on another domain of data. So we leave it to futher research to show if this score can be improved by finetuning the model on website data. 
+By pressing escape the user can cancel a search and return to the search field. If they want to exit the programm they can press strg+q at any time. This is also shown as a foot note allways at the footer of the terminal.
+
+\section{Conclusion}
