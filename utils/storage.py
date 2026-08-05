@@ -26,7 +26,8 @@ class DocumentStatus(IntEnum):
 
 class Storage:
     def __init__(self):
-        self._db = sqlite3.connect("mse.db", timeout=30.0)
+        self._db = sqlite3.connect("mse.db", timeout=30.0, isolation_level="IMMEDIATE")
+        self._db.execute("PRAGMA journal_mode=WAL;")
         self._db.create_function("HAMMING", 2, hamming_distance)
         self._cur = self._db.cursor()
 

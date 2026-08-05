@@ -4,7 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 from multiprocessing import JoinableQueue, Process, Queue as MPQueue
 from pathlib import Path
 from queue import Empty, Queue, ShutDown
-from threading import Thread, current_thread
+from threading import Thread, current_thread, Lock
 from time import sleep
 from urllib.parse import urljoin, urlsplit, urlunsplit
 from urllib.robotparser import RobotFileParser
@@ -46,12 +46,14 @@ MAX_INDEXERS  = args.indexers
 USER_AGENT = "MSE-Crawler"  # User Agent used when crawling
 CHUNK_SIZE = 16384          # Download 16KiB at a time
 MAX_DOCUMENT_SIZE = 2 * 1024 * 1024  # Document limit in bytes (2MiB)
+MAX_ROBOTS_CACHE_SIZE = 1000
 CLEANUP_ON_INDEX = True     # Should indexed files be deleted from cache
 PAGE_RANK_N = 10            # Number of iterations used to calculate page rank
 
 
 
 # In-memory dictionary to store compiled RobotFileParser instances per worker process
+_ROBOTS_CACHE_LOCK = Lock()
 _ROBOTS_RAM_CACHE: dict[str, RobotFileParser] = {}
 
 # Prevent the constant nagging about SSL verification
@@ -151,8 +153,9 @@ def __parse_robots(site_url: str) -> RobotFileParser:
     domain = url_seg.netloc
 
     # Check in-memory RAM cache first
-    if domain in _ROBOTS_RAM_CACHE:
-        return _ROBOTS_RAM_CACHE[domain]
+    with _ROBOTS_CACHE_LOCK:
+        if domain in _ROBOTS_RAM_CACHE:
+            return _ROBOTS_RAM_CACHE[domain]
 
     robots_path = f".cache/robots/{Path(domain).name}"
     robots_file = Path(robots_path)
@@ -176,10 +179,14 @@ def __parse_robots(site_url: str) -> RobotFileParser:
         TypeError,
     ):
         # Create an empty file to avoid unneeded requests
-        if robots_file.is_file():
-            robots_file.unlink()
+        try:
+            if robots_file.is_file():
+                robots_file.unlink()
 
-        robots_file.touch()
+            robots_file.touch()
+        except OSError:
+            pass
+
         rp = RobotFileParser()
         rp.parse([])
     except (FileNotFoundError, PermissionError, OSError):
@@ -187,8 +194,13 @@ def __parse_robots(site_url: str) -> RobotFileParser:
         rp = RobotFileParser()
         rp.parse([])
 
-    # Store compiled parser in RAM cache before returning
-    _ROBOTS_RAM_CACHE[domain] = rp
+    with _ROBOTS_CACHE_LOCK:
+        if len(_ROBOTS_RAM_CACHE) >= MAX_ROBOTS_CACHE_SIZE:
+            oldest_domain = next(iter(_ROBOTS_RAM_CACHE))
+            del _ROBOTS_RAM_CACHE[oldest_domain]
+
+        # Store compiled parser in RAM cache before returning
+        _ROBOTS_RAM_CACHE[domain] = rp
     return rp
 
 

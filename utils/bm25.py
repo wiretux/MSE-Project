@@ -34,6 +34,10 @@ def get_bm25(
             doc_length = doc_data["length"]
             doc_terms = doc_data["terms"]
 
+            # Prevent crashes if length is None
+            if doc_length is None:
+                doc_length = len(doc_terms)
+
             # Pre calculate the length normalization
             length_norm = 1 - b + b * (doc_length / avg_length)
 
