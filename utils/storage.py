@@ -200,9 +200,25 @@ class Storage:
         res = self._cur.fetchone()
         return res[0] if res else 0
 
+    def poll_content_for(self, id: UUID | list[UUID]) -> list[tuple[bytes, str]]:
+        if not isinstance(id, list):
+            id = [id]
+
+        if not id:
+            return []
+
+        query = f"""SELECT d.id, d.title, d.description, data
+        FROM documents d
+        JOIN content ON d.content_id = content.id
+        WHERE d.id IN ({",".join(["?"] * len(id))})
+        """
+
+        self._cur.execute(query, [i.bytes for i in id])
+        return [(UUID(bytes=id), title, description, data) for id, title, description, data in self._cur.fetchall()]
+
     def poll_content_ai(self, max: int = 50) -> list[tuple[bytes, str]]:
         self._cur.execute(f"SELECT id, data FROM content WHERE ai_score is NULL LIMIT {max}")
-        return [(id, data) for id, title, desc, data in self._cur.fetchall()]
+        return [(id, data) for id, data in self._cur.fetchall()]
 
     def add_ai_score(self, content_id: bytes, score: float = 0.0) -> None:
         self._cur.execute("UPDATE content SET ai_score = ? WHERE id = ?", [score, content_id])
@@ -418,9 +434,9 @@ class Storage:
         byte_ids = [doc_id.bytes for doc_id in doc_ids]
 
         query = f"""
-        SELECT id, url, title, description, length, depth, rank
-        FROM documents
-        WHERE id IN ({",".join(["?"] * len(byte_ids))})
+        SELECT d.id, url, title, description, length, depth, rank, ai_score
+        FROM documents d JOIN content ON content.id = d.content_id
+        WHERE d.id IN ({",".join(["?"] * len(byte_ids))})
         """
 
         self._cur.execute(query, byte_ids)
@@ -436,8 +452,9 @@ class Storage:
                 "length": length,
                 "depth": depth,
                 "rank": rank,
+                "ai_score": ai_score if ai_score else 0.0
             }
-            for doc_id, url, title, description, length, depth, rank in rows
+            for doc_id, url, title, description, length, depth, rank, ai_score in rows
         }
 
     def close(self) -> None:

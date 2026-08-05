@@ -14,7 +14,7 @@ from bs4 import BeautifulSoup
 from requests.exceptions import ConnectionError, RequestException, HTTPError
 from rich.progress import Progress
 
-from indexer import index, precalc_embeddings
+from indexer import index, precalc_embeddings, precalc_ai_score
 from utils import storage
 
 USER_AGENT = "MSE-Crawler"  # User Agent used when crawling
@@ -435,21 +435,19 @@ def crawl() -> None:
         progress_queue.put(None)
         updater_thread.join()
 
+        task_id = progress.add_task("[PageRank]", total=PAGE_RANK_N)
+        store.rank_pages(PAGE_RANK_N, progress=progress, task_id=task_id)
+
         index_count = store.count_index()
         embedding_count = store.count_embeddings()
-
         if index_count - embedding_count > 0:
             task_id = progress.add_task("[Embeddings]", total=index_count-embedding_count)
             precalc_embeddings(progress, task_id)
 
         missing_ai_score_count = store.count_missing_ai_score()
-
         if missing_ai_score_count > 0:
             task_id = progress.add_task("[AI-Detection]", total=missing_ai_score_count)
             precalc_ai_score(progress, task_id)
-        
-        task_id = progress.add_task("[PageRank]", total=PAGE_RANK_N)
-        store.rank_pages(PAGE_RANK_N, progress=progress, task_id=task_id)
 
     print(f"[Completed] Websites indexed: {index_count}")
 

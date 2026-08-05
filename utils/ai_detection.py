@@ -14,7 +14,7 @@ model = AutoModelForSequenceClassification.from_pretrained(model_name)
 model.to(device)
 model.eval()
 
-def get_ai_probabitlity(test: str) -> float:
+def get_ai_probabitlity(text: str) -> float:
     inputs = tokenizer(text, truncation=True, return_tensors="pt").to(device)
 
     with torch.no_grad():

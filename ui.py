@@ -258,7 +258,7 @@ class ResultScreen(Screen):
             url = doc["url"]
             title = doc.get("title", "Untitled")
             desc = doc.get("description")
-            ai_score = "AI-probably: " + str(int(doc.get("ai_score", 0) * 100)) + "%"
+            ai_score = f"AI-probably: {doc.get("ai_score", 0) * 100.0:.2f}%"
 
             if desc in [None, "", "[No description]"]:
                 desc = "No description provided"
@@ -298,7 +298,7 @@ class ResultScreen(Screen):
 
     # Open the URL of the selected result.
     def on_list_view_selected(self, event: ListView.Selected) -> None:
-        url, _, _ = self.search_list[event.index]
+        url, _, _, _ = self.search_list[event.index]
         self.app.open_url(url)
 
     # Go back to the search home screen.

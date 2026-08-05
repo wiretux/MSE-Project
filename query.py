@@ -1,24 +1,49 @@
 import math
 
 from utils import storage
-from utils.bert_reranker import bert_reranker
+from utils.bert_reranker import bert_reranker, get_bert_embedding
 from utils.bm25 import get_bm25
 
-# Start off with 5 * limit
+from uuid import UUID
+
+
+def ondemand_embedding_gen(missing_embeddings: set[UUID], embeddings: dict[UUID, list[float]]):
+    from rich.progress import Progress
+
+    with storage.access() as store, Progress() as progress:
+        task_id = progress.add_task("[OnDemand Embeddings]", total=len(missing_embeddings))
+
+        for id, title, desc, content in store.poll_content_for(list(missing_embeddings)):
+            if desc:
+                content = f"{desc}. {content}"
+            if title:
+                content = f"{title}. {content}"
+            embedding = get_bert_embedding(content)
+            store.add_embedding(id, embedding)
+            embeddings[id] = embedding
+            progress.advance(task_id, 1)
+
+# Start off with 2 * limit
 # Rerank pages with BERT to limit
 # Sort pages based on BERT and pagerank
-
-
 def retrieve(query: str, limit: int = 100, skew: float = 0.3) -> list[tuple[dict, float]]:
-    first_results = get_bm25(query, 5 * limit)
+    first_results = get_bm25(query, 2 * limit)
 
     if not first_results:
         return []
 
     with storage.access() as store:
         embeddings = store.get_embedding([doc_id for doc_id, _ in first_results])
+
+        missing_embeddings = { doc_id for doc_id, _ in first_results } - embeddings.keys()
+        if missing_embeddings:
+            ondemand_embedding_gen(missing_embeddings, embeddings)
+
         reranked_results = bert_reranker(query, embeddings)[:limit]
         result_docs = store.get_documents([doc_id for doc_id, _ in reranked_results])
+
+    if not result_docs:
+        return []
 
     combined_scores = dict(reranked_results)
 
