@@ -7,7 +7,7 @@ It was created as part of an assignment for the course *Modern Search Engines* i
 We recommend using [uv](https://github.com/astral-sh/uv). A modern, fast Python package manager.
 
 Set up your virtual environment and install dependencies:
-```
+```bash
 uv venv --python 3.14
 source .venv/bin/activate
 uv pip install torch --index-url https://download.pytorch.org/whl/cpu
@@ -17,13 +17,14 @@ uv pip install -r requirements.txt
  Activate the environment using ``.venv\Scripts\activate``
 # Crawler
 Before searching, populate the dataset by running the crawler:
+```bash
+python crawler.py [-h] [--skip-crawling] [--skip-embedding] [--skip-ai-detection] [--ignore-ssl] [-c CRAWLERS] [-i INDEXERS] [-w WAIT] [-t TIMEOUT] [-d DEPTH] [-a ATTEMPTS]
 ```
-python crawler.py
-```
+Use `python crawler.py -h` for detailed information about argument usage.
 
 # UI
 Launch the Terminal User Interface (TUI) to search interactively:
-```
+```bash
 python ui.py
 ```
 
@@ -40,7 +41,7 @@ Example:
 2   food and drinks
 ```
 Then run the batch processor:
-```
+```bash
 python batch.py [-o path/to/the/output-file] path/to/the/query-file 
 ```
 
