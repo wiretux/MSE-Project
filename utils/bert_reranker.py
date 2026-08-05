@@ -6,8 +6,10 @@ from transformers import AutoModel, AutoTokenizer, logging
 # Hide debugging info
 logging.set_verbosity_error()
 
-# Use CUDA/ROCm
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+# Use CUDA/ROCm/MPS
+device_str = "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
+device = torch.device(device_str)
+
 print(f"[BERT] Using device: {device}")
 
 # Load the bert model
