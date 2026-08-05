@@ -19,7 +19,8 @@ from utils import storage
 
 USER_AGENT = "MSE-Crawler"  # User Agent used when crawling
 CRAWL_DEPTH = 1  # Maximum distance/depth crawler may deviate from seed urls
-CRAWL_TIMEOUT = 10  # Timeout in seconds
+CRAWL_TIMEOUT = 20  # Timeout in seconds
+CRAWL_ATTEMPTS = 2
 CRAWLER_COUNT = 12
 CRAWLER_DELAY = 0.1
 CHUNK_SIZE = 16384  # 16KiB
@@ -67,13 +68,23 @@ def __download_with_limit(
     limit: int = MAX_DOCUMENT_SIZE,
     type: str = "text/html"
 ) -> None:
-    res = requests.get(
-        site_url,
-        headers={"User-Agent": USER_AGENT, "Accept-Language": "en"},
-        stream=True,
-        timeout=CRAWL_TIMEOUT,
-        verify=not IGNORE_SSL,
-    )
+    for _ in range(CRAWL_ATTEMPTS):
+        res = requests.get(
+            site_url,
+            headers={"User-Agent": USER_AGENT, "Accept-Language": "en"},
+            stream=True,
+            timeout=CRAWL_TIMEOUT,
+            verify=not IGNORE_SSL,
+        )
+
+        if res.status_code == 429:
+            try:
+                retry_after = int(res.headers.get("Retry-After", 30))
+                print("Rate-Limit")
+                sleep(min(retry_after, 30))
+                continue
+            except Exception:
+                pass
     res.raise_for_status()
 
     # Avoid downloading ""
@@ -177,8 +188,12 @@ def __parse_document(cache_path: str, site_url: str) -> dict[str, str | list[str
         links = {
             link
             for element in soup.find_all("a", href=True)
+            # Don't visit non-english pages
+            if element.get('lang', 'en').lower() in ('en', 'en-us', 'en-gb', 'en-ca', 'en-au')
+            if element.get('hreflang', 'en').lower() in ('en', 'en-us', 'en-gb', 'en-ca', 'en-au')
+
+            # Only use clean urls
             if (link := __clean_url(urljoin(site_url, element["href"])))
-            # Maybe limit MAX PATH DEPTH?: if len(link.split('/')) > MAX_PATH_DEPTH + 2
         }
 
         # Remove non content elements (e.g. nav, header, footer, aside)
@@ -298,6 +313,10 @@ def __index_worker(in_queue: JoinableQueue, progress_queue: MPQueue) -> None:
                         store.update_status(doc_id, storage.DocumentStatus.READY)
                     else:
                         store.update_status(doc_id, storage.DocumentStatus.SKIPPED)
+
+                        # Don't consider irrelevant documents past depth 1
+                        if depth > 1:
+                            continue
 
                     # Add links to frontier
                     if site["links"]:
@@ -456,9 +475,9 @@ if __name__ == "__main__":
         store.init()
         # Add Seed URLS at depth 0
         store.offer_frontier([
-                ("https://uni-tuebingen.de/en", 0)
-                #("https://en.wikipedia.org/wiki/T%C3%BCbingen", 0),
-                #("https://en.wikipedia.org/wiki/University_of_T%C3%BCbingen", 0),
+            ("https://uni-tuebingen.de/en", 0),
+            ("https://en.wikipedia.org/wiki/T%C3%BCbingen", 0),
+            ("https://en.wikipedia.org/wiki/University_of_T%C3%BCbingen", 0)
         ])
 
     crawl()
