@@ -429,7 +429,7 @@ class Storage:
             SELECT count(*) AS N,
                 avg(length) AS avg_length
             FROM documents
-            WHERE status = 3
+            WHERE status = {DocumentStatus.READY}
         ),
         term_meta AS (
             SELECT id,
@@ -449,6 +449,7 @@ class Storage:
             FROM postings
             JOIN term_meta ON term_id = term_meta.id
             JOIN documents ON doc_id = documents.id
+            WHERE documents.status = {DocumentStatus.READY}
             GROUP BY doc_id
             ORDER BY estimated_score DESC
             LIMIT {max}
