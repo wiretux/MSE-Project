@@ -54,3 +54,14 @@ def precalc_embeddings(progress: Progress, task_id: int):
                 store.add_embedding(id, embedding)
                 progress.advance(task_id, 1)
 
+
+def precalc_ai_score(progress: Progress, task_id: int):
+    # Lazy import ai_score
+    from utils import ai_detection
+
+    with storage.access() as store:
+        while queue := store.poll_content_ai():
+            for id, content in queue:
+                score = ai_detection.get_ai_probabitlity(content)
+                store.add_ai_score(id, score)
+                progress.advance(task_id, 1)

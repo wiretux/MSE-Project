@@ -441,6 +441,12 @@ def crawl() -> None:
         if index_count - embedding_count > 0:
             task_id = progress.add_task("[Embeddings]", total=index_count-embedding_count)
             precalc_embeddings(progress, task_id)
+
+        missing_ai_score_count = store.count_missing_ai_score()
+
+        if missing_ai_score_count > 0:
+            task_id = progress.add_task("[AI-Detection]", total=missing_ai_score_count)
+            precalc_ai_score(progress, task_id)
         
         task_id = progress.add_task("[PageRank]", total=PAGE_RANK_N)
         store.rank_pages(PAGE_RANK_N, progress=progress, task_id=task_id)

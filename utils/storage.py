@@ -46,7 +46,8 @@ class Storage:
         self._cur.execute("""CREATE TABLE IF NOT EXISTS content (
             id BLOB PRIMARY KEY,
             sim_hash BLOB NOT NULL,
-            data TEXT NOT NULL
+            data TEXT NOT NULL,
+            ai_score REAL
         )""")
 
         self._cur.execute("""CREATE TABLE IF NOT EXISTS links (
@@ -196,6 +197,19 @@ class Storage:
         self._cur.execute(
             f"SELECT count(*) FROM documents WHERE status = {DocumentStatus.READY}"
         )
+        res = self._cur.fetchone()
+        return res[0] if res else 0
+
+    def poll_content_ai(self, max: int = 50) -> list[tuple[bytes, str]]:
+        self._cur.execute(f"SELECT id, data FROM content WHERE ai_score is NULL LIMIT {max}")
+        return [(id, data) for id, title, desc, data in self._cur.fetchall()]
+
+    def add_ai_score(self, content_id: bytes, score: float = 0.0) -> None:
+        self._cur.execute("UPDATE content SET ai_score = ? WHERE id = ?", [score, content_id])
+        self._db.commit()
+
+    def count_missing_ai_score(self):
+        self._cur.execute("SELECT count(*) FROM content WHERE ai_score IS NULL")
         res = self._cur.fetchone()
         return res[0] if res else 0
 
